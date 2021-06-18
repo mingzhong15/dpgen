@@ -706,6 +706,13 @@ def make_model_devi (iter_index,
             sys_configs.append(temp_sys_list)
     else:
         sys_configs = jdata['sys_configs']
+    
+    '''
+    > sys_configs : list of abspath of initial structure
+    > [['/public/home/users/.../dpgen/init/Enstatite.vasp'],
+     ['/public/home/users/.../dpgen/init/Cmcm-pPv211.vasp']]
+    '''
+
     shuffle_poscar = jdata['shuffle_poscar']
 
     sys_idx = expand_idx(cur_job['sys_idx'])
@@ -720,7 +727,8 @@ def make_model_devi (iter_index,
         cur_systems.sort()
         cur_systems = [os.path.abspath(ii) for ii in cur_systems]
         conf_systems.append (cur_systems)
-
+    # conf_systems: list of abspath of initial structure used for molecular dynamics (model_devi)
+        
     iter_name = make_iter_name(iter_index)
     train_path = os.path.join(iter_name, train_name)
     train_path = os.path.abspath(train_path)
@@ -736,6 +744,8 @@ def make_model_devi (iter_index,
     conf_path = os.path.join(work_path, 'confs')
     create_path(conf_path)
     sys_counter = 0
+    
+    # initial structure file : vasp/poscar -> lammps/lmp
     for ss in conf_systems:
         conf_counter = 0
         for cc in ss :
@@ -765,6 +775,8 @@ def make_model_devi (iter_index,
         input_mode = "revise_template"
     use_plm = jdata.get('model_devi_plumed', False)
     use_plm_path = jdata.get('model_devi_plumed_path', False)
+    
+    # Q: what is the difference between '_native' and '_revmat' ? 
     if input_mode == "native":
         _make_model_devi_native(iter_index, jdata, mdata, conf_systems)
     elif input_mode == "revise_template":
