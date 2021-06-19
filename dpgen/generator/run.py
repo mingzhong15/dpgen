@@ -569,11 +569,19 @@ def parse_cur_job(cur_job) :
     ensemble = _get_param_alias(cur_job, ['ens', 'ensemble'])
     temps = [-1]
     press = [-1]
+    us = [-1]
     if 'npt' in ensemble :
         temps = _get_param_alias(cur_job, ['Ts','temps'])
         press = _get_param_alias(cur_job, ['Ps','press'])
     elif 'nvt' == ensemble or 'nve' == ensemble:
         temps = _get_param_alias(cur_job, ['Ts','temps'])
+    elif 'msst' == ensemble:
+        us =  _get_param_alias(cur_job, ['us'])
+        rlx_ens = _get_param_alias(cur_job, ['relax-ensemble'])
+        temps = _get_param_alias(cur_job, ['relax-temp'])
+        if 'npt' in relx_ens:
+            press = _get_param_alias(cur_job, ['relax-press'])
+        
     nsteps = _get_param_alias(cur_job, ['nsteps'])
     trj_freq = _get_param_alias(cur_job, ['t_freq', 'trj_freq','traj_freq'])
     if 'pka_e' in cur_job :
@@ -584,7 +592,7 @@ def parse_cur_job(cur_job) :
         dt = _get_param_alias(cur_job, ['dt'])
     else :
         dt = None
-    return ensemble, nsteps, trj_freq, temps, press, pka_e, dt
+    return ensemble, nsteps, trj_freq, temps, press, us, pka_e, dt
 
 def expand_matrix_values(target_list, cur_idx = 0):
     nvar = len(target_list)
@@ -908,7 +916,7 @@ def _make_model_devi_native(iter_index, jdata, mdata, conf_systems):
     if (iter_index >= len(model_devi_jobs)) :
         return False
     cur_job = model_devi_jobs[iter_index]
-    ensemble, nsteps, trj_freq, temps, press, pka_e, dt = parse_cur_job(cur_job)
+    ensemble, nsteps, trj_freq, temps, press, us, pka_e, dt = parse_cur_job(cur_job)
     if dt is not None :
         model_devi_dt = dt
     sys_idx = expand_idx(cur_job['sys_idx'])
@@ -918,6 +926,7 @@ def _make_model_devi_native(iter_index, jdata, mdata, conf_systems):
     use_ele_temp = jdata.get('use_ele_temp', 0)
     model_devi_dt = jdata['model_devi_dt']
     model_devi_neidelay = None
+    
     if 'model_devi_neidelay' in jdata :
         model_devi_neidelay = jdata['model_devi_neidelay']
     model_devi_taut = 0.1
@@ -926,6 +935,7 @@ def _make_model_devi_native(iter_index, jdata, mdata, conf_systems):
     model_devi_taup = 0.5
     if 'model_devi_taup' in jdata :
         model_devi_taup = jdata['model_devi_taup']
+
     mass_map = jdata['mass_map']
     nopbc = jdata.get('model_devi_nopbc', False)
 
@@ -967,55 +977,59 @@ def _make_model_devi_native(iter_index, jdata, mdata, conf_systems):
                     te_f = None
                     te_a = None
                 for pp in press:
-                    task_name = make_model_devi_task_name(sys_idx[sys_counter], task_counter)
-                    conf_name = make_model_devi_conf_name(sys_idx[sys_counter], conf_counter) + '.lmp'
-                    task_path = os.path.join(work_path, task_name)
-                    # dlog.info(task_path)
-                    create_path(task_path)
-                    create_path(os.path.join(task_path, 'traj'))
-                    loc_conf_name = 'conf.lmp'
-                    os.symlink(os.path.join(os.path.join('..','confs'), conf_name),
-                               os.path.join(task_path, loc_conf_name) )
-                    cwd_ = os.getcwd()
-                    os.chdir(task_path)
-                    try:
-                        mdata["deepmd_version"]
-                    except KeyError:
-                        mdata = set_version(mdata)
-                    deepmd_version = mdata['deepmd_version']
-                    file_c = make_lammps_input(ensemble,
-                                               loc_conf_name,
-                                               task_model_list,
-                                               nsteps,
-                                               model_devi_dt,
-                                               model_devi_neidelay,
-                                               trj_freq,
-                                               mass_map,
-                                               tt,
-                                               jdata = jdata,
-                                               tau_t = model_devi_taut,
-                                               pres = pp,
-                                               tau_p = model_devi_taup,
-                                               pka_e = pka_e,
-                                               ele_temp_f = te_f,
-                                               ele_temp_a = te_a,
-                                               nopbc = nopbc,
-                                               deepmd_version = deepmd_version)
-                    job = {}
-                    job["ensemble"] = ensemble
-                    job["press"] = pp
-                    job["temps"] = tt
-                    if te_f is not None:
-                        job["ele_temp"] = te_f
-                    if te_a is not None:
-                        job["ele_temp"] = te_a
-                    job["model_devi_dt"] =  model_devi_dt
-                    with open('job.json', 'w') as _outfile:
-                        json.dump(job, _outfile, indent = 4)
-                    os.chdir(cwd_)
-                    with open(os.path.join(task_path, 'input.lammps'), 'w') as fp :
-                        fp.write(file_c)
-                    task_counter += 1
+                    for uu in us:
+                        task_name = make_model_devi_task_name(sys_idx[sys_counter], task_counter)
+                        conf_name = make_model_devi_conf_name(sys_idx[sys_counter], conf_counter) + '.lmp'
+                        task_path = os.path.join(work_path, task_name)
+                        # dlog.info(task_path)
+                        create_path(task_path)
+                        create_path(os.path.join(task_path, 'traj'))
+                        loc_conf_name = 'conf.lmp'
+                        os.symlink(os.path.join(os.path.join('..','confs'), conf_name),
+                                   os.path.join(task_path, loc_conf_name) )
+                        cwd_ = os.getcwd()
+                        os.chdir(task_path)
+                        try:
+                            mdata["deepmd_version"]
+                        except KeyError:
+                            mdata = set_version(mdata)
+                        deepmd_version = mdata['deepmd_version']
+                        file_c = make_lammps_input(ensemble,
+                                                   loc_conf_name,
+                                                   task_model_list,
+                                                   nsteps,
+                                                   model_devi_dt,
+                                                   model_devi_neidelay,
+                                                   trj_freq,
+                                                   mass_map,
+                                                   tt,
+                                                   jdata = jdata,
+                                                   cur_job = cur_job,
+                                                   tau_t = model_devi_taut,
+                                                   pres = pp,
+                                                   us = uu,
+                                                   tau_p = model_devi_taup,
+                                                   pka_e = pka_e,
+                                                   ele_temp_f = te_f,
+                                                   ele_temp_a = te_a,
+                                                   nopbc = nopbc,
+                                                   deepmd_version = deepmd_version)
+                        job = {}
+                        job["ensemble"] = ensemble
+                        job["press"] = pp
+                        job["temps"] = tt
+                        job["us"] = uu
+                        if te_f is not None:
+                            job["ele_temp"] = te_f
+                        if te_a is not None:
+                            job["ele_temp"] = te_a
+                        job["model_devi_dt"] =  model_devi_dt
+                        with open('job.json', 'w') as _outfile:
+                            json.dump(job, _outfile, indent = 4)
+                        os.chdir(cwd_)
+                        with open(os.path.join(task_path, 'input.lammps'), 'w') as fp :
+                            fp.write(file_c)
+                        task_counter += 1
             conf_counter += 1
         sys_counter += 1
 
