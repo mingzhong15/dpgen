@@ -24,6 +24,7 @@ def make_lammps_input(ensemble,
                       mass_map,
                       temp, 
                       jdata,
+                      cur_job,
                       tau_t = 0.1,
                       pres = None,
                       tau_p = 0.5,
@@ -32,8 +33,6 @@ def make_lammps_input(ensemble,
                       ele_temp_a = None,
                       max_seed = 1000000,
                       us = None,
-                      q_value = 36,
-                      tscale = 0.01,
                       nopbc = False,
                       deepmd_version = '0.1') :
     if (ele_temp_f is not None or ele_temp_a is not None) and LooseVersion(deepmd_version) < LooseVersion('1'):
@@ -42,10 +41,23 @@ def make_lammps_input(ensemble,
         raise RuntimeError('the frame style ele_temp and atom style ele_temp should not be set at the same time')
        
     if us is not None and ensemble == 'msst':
-        temp = 300.0
-        press = 0.0
-        
-    ret = "variable        NSTEPS          equal %d\n" % nsteps
+        q_value = 36
+        tscale = 0.01
+        msst_direction = 'z'
+        rlx_ens = cur_job['relax-ensemble']
+        if 'q_value' in cur_job:
+            q_value = cur_job['q_value']
+        if 'tscale' in cur_job:
+            tscale = cur_job['tscale']
+        if 'direction' in cur_job:
+            msst_direction = cur_job['direction']
+            
+    if (nsteps == list) and (len(nsteps) == 2):
+        ret = "variable        NSTEPS_RLX          equal %d\n" % nsteps[0]
+        ret = "variable        NSTEPS          equal %d\n" % nsteps[1]
+    elif nsteps == int:
+        ret = "variable        NSTEPS_RLX          equal %d\n" % nsteps
+        ret = "variable        NSTEPS          equal %d\n" % nsteps
     ret+= "variable        THERMO_FREQ     equal %d\n" % trj_freq
     ret+= "variable        DUMP_FREQ       equal %d\n" % trj_freq
     ret+= "variable        TEMP            equal %f\n" % temp
@@ -143,11 +155,15 @@ def make_lammps_input(ensemble,
     elif ensemble == 'nve' :
         ret+= "fix             1 all nve\n"
     elif ensemble == 'msst' :
-        ret+= "fix             1 all nvt temp ${TEMP} ${TEMP} ${TAU_T}\n"
-        ret+= "run             10000\n"
+        if rlx_ens == 'nvt' :
+            ret+= "fix             1 all nvt temp ${TEMP} ${TEMP} ${TAU_T}\n"
+        elif rlx_ens == 'npt' :
+            ret+= "fix             1 all npt temp ${TEMP} ${TEMP} ${TAU_T} tri ${PRES} ${PRES} ${TAU_P}\n"
+            
+        ret+= "run             ${NSTEPS_RLX}\n" 
         ret+= "unfix           1\n"
 
-        ret+= "fix             1 all msst z ${us} q ${q_value} tscale ${tscale}\n"
+        ret+= "fix             1 all msst %s ${us} q ${q_value} tscale ${tscale}\n" % shock_direction
         ret+= "fix             PRINT all print ${DUMP_FREQ}  \"${STEP} ${myTEMP} ${myPRESS} ${VOL} ${RHO} ${ETOTAL}\" file thermo.dat title screen no\n"
         
     else :
