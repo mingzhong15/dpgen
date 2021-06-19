@@ -31,12 +31,20 @@ def make_lammps_input(ensemble,
                       ele_temp_f = None,
                       ele_temp_a = None,
                       max_seed = 1000000,
+                      us = None,
+                      q_value = 36,
+                      tscale = 0.01,
                       nopbc = False,
                       deepmd_version = '0.1') :
     if (ele_temp_f is not None or ele_temp_a is not None) and LooseVersion(deepmd_version) < LooseVersion('1'):
         raise RuntimeError('the electron temperature is only supported by deepmd-kit >= 1.0.0, please upgrade your deepmd-kit')
     if ele_temp_f is not None and ele_temp_a is not None:
         raise RuntimeError('the frame style ele_temp and atom style ele_temp should not be set at the same time')
+       
+    if us is not None and ensemble == 'msst':
+        temp = 300.0
+        press = 0.0
+        
     ret = "variable        NSTEPS          equal %d\n" % nsteps
     ret+= "variable        THERMO_FREQ     equal %d\n" % trj_freq
     ret+= "variable        DUMP_FREQ       equal %d\n" % trj_freq
@@ -48,6 +56,18 @@ def make_lammps_input(ensemble,
     ret+= "variable        PRES            equal %f\n" % pres
     ret+= "variable        TAU_T           equal %f\n" % tau_t
     ret+= "variable        TAU_P           equal %f\n" % tau_p
+    # ===== for fix-msst ===== #
+    if ensemble == 'msst':
+        ret+= "variable        us              equal %f\n" % us
+        ret+= "variable        q_value         equal %f\n" % q_value
+        ret+= "variable        tscale         equal %f\n" % tscale
+    ret+= "variable        myTEMP         equal temp\n"
+    ret+= "variable        myPRESS        equal press\n"
+    ret+= "variable        ETOTAL         equal etotal\n"
+    ret+= "variable        VOL            equal vol\n"
+    ret+= "variable        RHO            equal density\n"
+    ret+= "variable        STEP           equal step\n"
+    # ========== #
     ret+= "\n"
     ret+= "units           metal\n"
     if nopbc:
@@ -57,6 +77,7 @@ def make_lammps_input(ensemble,
     ret+= "atom_style      atomic\n"
     ret+= "\n"
     ret+= "neighbor        1.0 bin\n"
+    ret+= "neigh_modify    every 10 delay 0 check no page 500000 one 50000"
     if neidelay is not None :
         ret+= "neigh_modify    delay %d\n" % neidelay
     ret+= "\n"
@@ -121,6 +142,14 @@ def make_lammps_input(ensemble,
         ret+= "fix             1 all nvt temp ${TEMP} ${TEMP} ${TAU_T}\n"
     elif ensemble == 'nve' :
         ret+= "fix             1 all nve\n"
+    elif ensemble == 'msst' :
+        ret+= "fix             1 all nvt temp ${TEMP} ${TEMP} ${TAU_T}\n"
+        ret+= "run             10000\n"
+        ret+= "unfix           1\n"
+
+        ret+= "fix             1 all msst z ${us} q ${q_value} tscale ${tscale}\n"
+        ret+= "fix             PRINT all print ${DUMP_FREQ}  \"${STEP} ${myTEMP} ${myPRESS} ${VOL} ${RHO} ${ETOTAL}\" file thermo.dat title screen no\n"
+        
     else :
         raise RuntimeError("unknown emsemble " + ensemble)
     if nopbc:
