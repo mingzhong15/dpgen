@@ -73,12 +73,12 @@ def make_lammps_input(ensemble,
         ret+= "variable        us              equal %f\n" % us
         ret+= "variable        q_value         equal %f\n" % q_value
         ret+= "variable        tscale         equal %f\n\n" % tscale
-    ret+= "variable        myTEMP         equal temp\n"
-    ret+= "variable        myPRESS        equal press\n"
-    ret+= "variable        ETOTAL         equal etotal\n"
-    ret+= "variable        VOL            equal vol\n"
-    ret+= "variable        RHO            equal density\n"
-    ret+= "variable        STEP           equal step\n"
+        ret+= "variable        myTEMP         equal temp\n"
+        ret+= "variable        myPRESS        equal press\n"
+        ret+= "variable        ETOTAL         equal etotal\n"
+        ret+= "variable        VOL            equal vol\n"
+        ret+= "variable        RHO            equal density\n"
+        ret+= "variable        STEP           equal step\n"
     # ========== #
     ret+= "\n"
     ret+= "units           metal\n"
