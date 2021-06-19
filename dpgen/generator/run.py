@@ -1660,9 +1660,18 @@ def make_fp_pwscf(iter_index,
     cwd = os.getcwd()
     for ii in fp_tasks:
         os.chdir(ii)
+        
+        use_ele = False
+        if os.path.exists('job.json'):
+            with open('job.json') as fp:
+                job_data = json.load(fp)
+            if 'ele_temp' in job_data:
+                use_ele = True
+                ele_temp = job_data['ele_temp']
+
         sys_data = dpdata.System('POSCAR').data
         sys_data['atom_masses'] = jdata['mass_map']
-        ret = make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = user_input)
+        ret = make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = user_input, use_ele = use_ele, ele_temp = ele_temp)
         with open('input', 'w') as fp:
             fp.write(ret)
         os.chdir(cwd)
