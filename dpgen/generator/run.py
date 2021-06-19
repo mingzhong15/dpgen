@@ -1182,7 +1182,12 @@ def _make_fp_vasp_inner (modd_path,
     set_tmp = set(system_index)
     system_index = list(set_tmp)
     system_index.sort()
+    
+    f_ele_temp = False
 
+    if 'f_ele_temp' in jdata:
+        f_ele_temp = jdata["f_ele_temp"]
+    
     fp_tasks = []
     cluster_cutoff = jdata['cluster_cutoff'] if jdata.get('use_clusters', False) else None
     # skip save *.out if detailed_report_make_fp is False, default is True
@@ -1204,18 +1209,31 @@ def _make_fp_vasp_inner (modd_path,
         counter['candidate'] = 0
         counter['failed'] = 0
         counter['accurate'] = 0
+        
+        # tt : path of system , iter.0000xx/01.model_devi/task.0xx.000xxx
         for tt in modd_system_task :
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 all_conf = np.loadtxt(os.path.join(tt, 'model_devi.out'))
+                
+                if f_ele_temp:
+                    thermo_conf = np.loadtxt(os.path.join(tt, 'thermo.dat'))
+                
                 for ii in range(all_conf.shape[0]) :
                     if all_conf[ii][0] < model_devi_skip :
                         continue
                     cc = int(all_conf[ii][0])
+                    
+                    if f_ele_temp:
+                        f_temp = thermo_conf[ii][1]
+                    
                     if cluster_cutoff is None:
                         if (all_conf[ii][1] < e_trust_hi and all_conf[ii][1] >= e_trust_lo) or \
                            (all_conf[ii][4] < f_trust_hi and all_conf[ii][4] >= f_trust_lo) :
-                            fp_candidate.append([tt, cc])
+                            if f_ele_temp:
+                                fp_candidate.append([tt, cc, f_temp])
+                            else:
+                                fp_candidate.append([tt, cc])
                             counter['candidate'] += 1
                         elif (all_conf[ii][1] >= e_trust_hi ) or (all_conf[ii][4] >= f_trust_hi ):
                             if detailed_report_make_fp:
