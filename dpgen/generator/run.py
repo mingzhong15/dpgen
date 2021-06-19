@@ -579,7 +579,7 @@ def parse_cur_job(cur_job) :
         us =  _get_param_alias(cur_job, ['us'])
         rlx_ens = _get_param_alias(cur_job, ['relax-ensemble'])
         temps = _get_param_alias(cur_job, ['relax-temp'])
-        if 'npt' in relx_ens:
+        if 'npt' in rlx_ens:
             press = _get_param_alias(cur_job, ['relax-press'])
         
     nsteps = _get_param_alias(cur_job, ['nsteps'])
