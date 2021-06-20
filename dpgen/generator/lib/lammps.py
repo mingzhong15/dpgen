@@ -52,10 +52,10 @@ def make_lammps_input(ensemble,
         if 'direction' in cur_job:
             shock_direction = cur_job['direction']
             
-    if (nsteps == list) and (len(nsteps) == 2):
+    if (type(nsteps) == list) and (len(nsteps) == 2):
         ret = "variable        NSTEPS_RLX          equal %d\n" % nsteps[0]
         ret += "variable        NSTEPS          equal %d\n" % nsteps[1]
-    elif nsteps == int:
+    elif type(nsteps) == int:
         ret = "variable        NSTEPS_RLX          equal %d\n" % nsteps
         ret += "variable        NSTEPS          equal %d\n" % nsteps
     ret+= "variable        THERMO_FREQ     equal %d\n" % trj_freq
