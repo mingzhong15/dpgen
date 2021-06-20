@@ -1053,6 +1053,11 @@ def run_model_devi (iter_index,
     command = "{ if [ ! -f dpgen.restart.10000 ]; then %s -i input.lammps -v restart 0; else %s -i input.lammps -v restart 1; fi }" % (lmp_exec, lmp_exec)
     commands = [command]
 
+    f_ele_temp = False
+
+    if 'f_ele_temp' in jdata:
+        f_ele_temp = jdata["f_ele_temp"]
+        
     fp = open (os.path.join(work_path, 'cur_job.json'), 'r')
     cur_job = json.load (fp)
 
@@ -1073,6 +1078,10 @@ def run_model_devi (iter_index,
     model_names = [os.path.basename(ii) for ii in all_models]
     forward_files = ['conf.lmp', 'input.lammps', 'traj']
     backward_files = ['model_devi.out', 'model_devi.log', 'traj']
+
+    if f_ele_temp:
+        backward_files += ['thermo.dat']
+              
     if use_plm:
         forward_files += ['input.plumed']
        # backward_files += ['output.plumed']
