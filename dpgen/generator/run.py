@@ -1222,9 +1222,12 @@ def _make_fp_vasp_inner (modd_path,
                 for ii in range(all_conf.shape[0]) :
                     if all_conf[ii][0] < model_devi_skip :
                         continue
+                        
+                    # read from model_devi.out : step of the configuration
                     cc = int(all_conf[ii][0])
                     
                     if f_ele_temp:
+                        # read from thermo.dat : temperature of the configuration
                         f_temp = thermo_conf[ii][1]
                     
                     if cluster_cutoff is None:
@@ -1298,6 +1301,10 @@ def _make_fp_vasp_inner (modd_path,
         for cc in range(numb_task) :
             tt = fp_candidate[cc][0]
             ii = fp_candidate[cc][1]
+            
+            if f_ele_temp:
+                cc_temp = fp_candidate[cc][2]
+                
             ss = os.path.basename(tt).split('.')[1]
             conf_name = os.path.join(tt, "traj")
             conf_name = os.path.join(conf_name, str(ii) + '.lammpstrj')
@@ -1333,7 +1340,16 @@ def _make_fp_vasp_inner (modd_path,
             os.chdir(fp_task_path)
             if cluster_cutoff is None:
                 os.symlink(os.path.relpath(conf_name), 'conf.dump')
-                os.symlink(os.path.relpath(job_name), 'job.json')
+                
+                if f_ele_temp:
+                    with open(job_name,'r') as fp:
+                        f_job = json.load(fp)    
+                        f_job['temps'] = cc_temp
+                        f_job['ele_temp'] = cc_temp
+                    with open('job.json','w') as outfile:
+                        json.dump(f_job, outfile, indent = 4)    
+                else:
+                    os.symlink(os.path.relpath(job_name), 'job.json')
             else:
                 os.symlink(os.path.relpath(poscar_name), 'POSCAR')
                 np.save("atom_pref", new_system.data["atom_pref"])
