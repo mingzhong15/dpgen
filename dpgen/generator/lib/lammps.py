@@ -164,7 +164,7 @@ def make_lammps_input(ensemble,
         ret+= "unfix           1\n\n"
 
         ret+= "fix             1 all msst %s ${us} q ${q_value} tscale ${tscale}\n" % shock_direction
-        ret+= "fix             PRINT all print ${DUMP_FREQ}  \"${STEP} ${myTEMP} ${myPRESS} ${VOL} ${RHO} ${ETOTAL}\" file thermo.dat title screen no\n"
+        ret+= "fix             PRINT all print ${DUMP_FREQ}  \"${STEP} ${myTEMP} ${myPRESS} ${VOL} ${RHO} ${ETOTAL}\" file thermo.dat screen no\n"
         
     else :
         raise RuntimeError("unknown emsemble " + ensemble)
