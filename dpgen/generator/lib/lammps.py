@@ -39,7 +39,12 @@ def make_lammps_input(ensemble,
         raise RuntimeError('the electron temperature is only supported by deepmd-kit >= 1.0.0, please upgrade your deepmd-kit')
     if ele_temp_f is not None and ele_temp_a is not None:
         raise RuntimeError('the frame style ele_temp and atom style ele_temp should not be set at the same time')
-       
+    
+    f_ele_temp = False
+
+    if 'f_ele_temp' in jdata:
+        f_ele_temp = jdata["f_ele_temp"]
+        
     if us is not None and ensemble == 'msst':
         q_value = 36
         tscale = 0.01
@@ -73,6 +78,8 @@ def make_lammps_input(ensemble,
         ret+= "variable        us              equal %f\n" % us
         ret+= "variable        q_value         equal %f\n" % q_value
         ret+= "variable        tscale         equal %f\n\n" % tscale
+        
+    if f_ele_temp:
         ret+= "variable        myTEMP         equal temp\n"
         ret+= "variable        myPRESS        equal press\n"
         ret+= "variable        ETOTAL         equal etotal\n"
@@ -164,6 +171,8 @@ def make_lammps_input(ensemble,
         ret+= "unfix           1\n\n"
 
         ret+= "fix             1 all msst %s ${us} q ${q_value} tscale ${tscale}\n" % shock_direction
+        
+    if f_ele_temp:
         ret+= "fix             PRINT all print ${DUMP_FREQ}  \"${STEP} ${myTEMP} ${myPRESS} ${VOL} ${RHO} ${ETOTAL}\" file thermo.dat screen no\n"
         
     else :
