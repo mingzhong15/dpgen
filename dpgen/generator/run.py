@@ -1228,6 +1228,9 @@ def _make_fp_vasp_inner (modd_path,
                 if f_ele_temp:
                     thermo_conf = np.loadtxt(os.path.join(tt, 'thermo.dat'))
                 
+                init_conf = int(all_conf.shape[0] - thermo_conf.shape[0])
+                all_conf = all_conf[init_conf:]
+                
                 for ii in range(all_conf.shape[0]) :
                     if all_conf[ii][0] < model_devi_skip :
                         continue
