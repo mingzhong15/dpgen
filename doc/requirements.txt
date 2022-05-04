@@ -1,0 +1,7 @@
+sphinx>=4.0.2
+recommonmark
+sphinx_rtd_theme
+sphinx_markdown_tables
+myst-parser
+deepmodeling_sphinx
+.

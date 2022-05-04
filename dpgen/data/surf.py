@@ -11,7 +11,7 @@ import dpgen.data.tools.sc as sc
 import dpgen.data.tools.bcc as bcc
 from dpgen import dlog
 from dpgen import ROOT_PATH
-from dpgen.remote.decide_machine import  decide_fp_machine
+from dpgen.remote.decide_machine import  convert_mdata
 from dpgen.dispatcher.Dispatcher import Dispatcher, make_dispatcher
 #-----PMG---------
 from pymatgen.io.vasp import Poscar
@@ -447,7 +447,7 @@ def make_scale(jdata):
                 try:
                     pos_src = os.path.join(os.path.join(init_path, ii), 'CONTCAR')
                     assert(os.path.isfile(pos_src))
-                except:
+                except Exception:
                     raise RuntimeError("not file %s, vasp relaxation should be run before scale poscar")
             scale_path = os.path.join(work_path, ii)
             scale_path = os.path.join(scale_path, "scale-%.3f" % jj)
@@ -583,7 +583,7 @@ def gen_init_surf(args):
        jdata=loadfn(args.PARAM)
        if args.MACHINE is not None:
           mdata=loadfn(args.MACHINE)
-    except:
+    except Exception:
         with open (args.PARAM, 'r') as fp :
             jdata = json.load (fp)
         if args.MACHINE is not None:
@@ -596,7 +596,7 @@ def gen_init_surf(args):
     
     if args.MACHINE is not None:
        # Decide a proper machine
-       mdata = decide_fp_machine(mdata)
+       mdata = convert_mdata(mdata, ["fp"])
        # disp = make_dispatcher(mdata["fp_machine"])
 
     #stage = args.STAGE

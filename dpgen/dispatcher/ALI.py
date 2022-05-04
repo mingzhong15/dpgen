@@ -84,6 +84,21 @@ def manual_delete(stage):
         os.remove("apg_id.json")
         print("delete successfully!")
 
+def delete_apg(stage):
+    fp = open("machine-ali.json")
+    data = json.load(fp)
+    mdata_machine = data[stage][0]["machine"]
+    mdata_resources = data[stage][0]["resources"]
+    cloud_resources = mdata_machine["cloud_resources"]
+    ali = ALI(mdata_machine, mdata_resources, "work_path", [1], 1, cloud_resources)
+    fp = open("apg_id.json")
+    data = json.load(fp)
+    ali.cloud_resources["apg_id"] = data["apg_id"]
+    ali.delete_apg()
+    os.remove("apg_id.json")
+    print("delete successfully!")
+    
+
 class ALI(DispatcherList):
     def __init__(self, mdata_machine, mdata_resources, work_path, run_tasks, group_size, cloud_resources=None):
         super().__init__(mdata_machine, mdata_resources, work_path, run_tasks, group_size, cloud_resources)
@@ -337,7 +352,7 @@ class ALI(DispatcherList):
                 response = self.client.do_action_with_exception(request)
                 flag = 1
                 break
-            except:
+            except Exception:
                 count += 1
         # count = 10 and still failed, continue
 
@@ -367,7 +382,7 @@ class ALI(DispatcherList):
                             return img["ImageId"]
                     flag = 1
                     break
-                except:
+                except Exception:
                     count += 1
                     time.sleep(10)
         if not flag:
@@ -426,7 +441,7 @@ class ALI(DispatcherList):
                 response = self.client.do_action_with_exception(request)
                 flag = 1
                 break
-            except:
+            except Exception:
                 count += 1
                 time.sleep(10)
         if not flag:
@@ -495,5 +510,5 @@ class ALI(DispatcherList):
                         else:
                             ip_list.append(response["Instances"]["Instance"][0]["VpcAttributes"]["PrivateIpAddress"]['IpAddress'][0])
             return ip_list
-        except: return []
+        except Exception: return []
 

@@ -1,4 +1,7 @@
+from distutils.version import LooseVersion
 import os,sys,time,random,json,glob
+from typing import List
+from dpdispatcher import Task, Submission, Resources, Machine
 from dpgen.dispatcher.LocalContext import LocalSession
 from dpgen.dispatcher.LocalContext import LocalContext
 from dpgen.dispatcher.LazyLocalContext import LazyLocalContext
@@ -12,6 +15,8 @@ from dpgen.dispatcher.AWS import AWS
 from dpgen.dispatcher.JobStatus import JobStatus
 from dpgen import dlog
 from hashlib import sha1
+# import dargs
+from dargs.dargs import Argument
 
 def _split_tasks(tasks,
                  group_size):
@@ -329,7 +334,7 @@ def make_dispatcher(mdata, mdata_resource=None, work_path=None, run_tasks=None, 
             context_type = 'local'
         try:
             batch_type = mdata['batch']
-        except:
+        except Exception:
             dlog.info('cannot find key "batch" in machine file, try to use deprecated key "machine_type"')
             batch_type = mdata['machine_type']
         lazy_local = (mdata.get('lazy-local', False)) or (mdata.get('lazy_local', False))
@@ -338,3 +343,66 @@ def make_dispatcher(mdata, mdata_resource=None, work_path=None, run_tasks=None, 
             context_type = 'lazy-local'
         disp = Dispatcher(mdata, context_type=context_type, batch_type=batch_type)
         return disp
+
+def make_submission(mdata_machine, mdata_resources, commands, work_path, run_tasks, group_size,
+    forward_common_files, forward_files, backward_files, outlog, errlog):
+
+    if mdata_machine['local_root'] != './':
+        raise RuntimeError(f"local_root must be './' in dpgen's machine.json.")
+    
+    abs_local_root = os.path.abspath('./')
+
+    abs_mdata_machine = mdata_machine.copy()
+    abs_mdata_machine['local_root'] = abs_local_root
+
+    machine = Machine.load_from_dict(abs_mdata_machine)
+    resources = Resources.load_from_dict(mdata_resources)
+
+
+    command = "&&".join(commands)
+
+    task_list = []
+    for ii in run_tasks:
+        task = Task(
+            command=command, 
+            task_work_path=ii,
+            forward_files=forward_files,
+            backward_files=backward_files,
+            outlog=outlog,
+            errlog=errlog
+        )
+        task_list.append(task)
+
+    submission = Submission(
+        work_base=work_path,
+        machine=machine,
+        resources=resources,
+        task_list=task_list,
+        forward_common_files=forward_common_files,
+        backward_common_files=[]
+    )
+    return submission
+
+
+def mdata_arginfo() -> List[Argument]:
+    """This method generates arginfo for a single mdata.
+
+    A submission requires the following keys: command, machine,
+    and resources.
+    
+    Returns
+    -------
+    list[Argument]
+        arginfo
+    """
+    doc_command = "Command of a program."
+    doc_mdata = "Machine and resources parameters"
+    command_arginfo = Argument("command", str, optional=False, doc=doc_command)
+    machine_arginfo = Machine.arginfo()
+    machine_arginfo.name = "machine"
+    resources_arginfo = Resources.arginfo()
+    resources_arginfo.name = "resources"
+
+    return [
+        command_arginfo, machine_arginfo, resources_arginfo,
+    ]
