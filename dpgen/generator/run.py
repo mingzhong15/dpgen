@@ -1303,7 +1303,6 @@ def run_md_model_devi (iter_index,
 
     all_task = glob.glob(os.path.join(work_path, "task.*"))
     all_task.sort()
-<<<<<<< HEAD
     command = "{ if [ ! -f dpgen.restart.10000 ]; then %s -i input.lammps -v restart 0; else %s -i input.lammps -v restart 1; fi }" % (lmp_exec, lmp_exec)
     commands = [command]
 
@@ -1312,8 +1311,6 @@ def run_md_model_devi (iter_index,
     if 'f_ele_temp' in jdata:
         f_ele_temp = jdata["f_ele_temp"]
         
-=======
->>>>>>> upstream/master
     fp = open (os.path.join(work_path, 'cur_job.json'), 'r')
     cur_job = json.load (fp)
 
@@ -1332,7 +1329,6 @@ def run_md_model_devi (iter_index,
     #dlog.info("run_tasks in run_model_deviation",run_tasks_)
     all_models = glob.glob(os.path.join(work_path, 'graph*pb'))
     model_names = [os.path.basename(ii) for ii in all_models]
-<<<<<<< HEAD
     forward_files = ['conf.lmp', 'input.lammps', 'traj']
     backward_files = ['model_devi.out', 'model_devi.log', 'traj']
 
@@ -1345,7 +1341,6 @@ def run_md_model_devi (iter_index,
         backward_files += ['output.plumed','COLVAR','dump.0.xyz']
         if use_plm_path:
             forward_files += ['plmpath.pdb']
-=======
 
     model_devi_engine = jdata.get("model_devi_engine", "lammps")
     if model_devi_engine == "lammps":
@@ -1393,7 +1388,6 @@ def run_md_model_devi (iter_index,
         if ndx_filename: forward_files.append(ndx_filename)
         backward_files = ["%s.tpr" % deffnm, "%s.log" %deffnm , traj_filename, 'model_devi.out', "traj", "traj_deepmd" ]
 
->>>>>>> upstream/master
 
     cwd = os.getcwd()
 
@@ -1797,7 +1791,6 @@ def _make_fp_vasp_inner (modd_path,
         modd_system_glob = os.path.join(modd_path, 'task.' + ss + '.*')
         modd_system_task = glob.glob(modd_system_glob)
         modd_system_task.sort()
-<<<<<<< HEAD
         cc = 0
         counter = Counter()
         counter['candidate'] = 0
@@ -1860,7 +1853,6 @@ def _make_fp_vasp_inner (modd_path,
                             for jj in idx_rest_failed:
                                 fp_rest_failed.append([tt, cc, jj])
                         counter['failed'] += len(idx_rest_failed)
-=======
 
         # convert global trust limitations to local ones
         f_trust_lo_sys = _trust_limitation_check(ss, f_trust_lo)
@@ -1896,7 +1888,6 @@ def _make_fp_vasp_inner (modd_path,
                 )
             dlog.info("system {0:s} {1:9s} : f_trust_lo {2:6.3f}   v_trust_lo {3:6.3f}".format(ss, 'adapted', f_trust_lo_ad, v_trust_lo_ad))
 
->>>>>>> upstream/master
         # print a report
         fp_sum = sum(counter.values())
 
@@ -2011,7 +2002,6 @@ def _make_fp_vasp_inner (modd_path,
             cwd = os.getcwd()
             os.chdir(fp_task_path)
             if cluster_cutoff is None:
-<<<<<<< HEAD
                 os.symlink(os.path.relpath(conf_name), 'conf.dump')
                 
                 if f_ele_temp:
@@ -2023,7 +2013,6 @@ def _make_fp_vasp_inner (modd_path,
                         json.dump(f_job, outfile, indent = 4)    
                 else:
                     os.symlink(os.path.relpath(job_name), 'job.json')
-=======
                 if model_devi_engine != 'calypso':
                     os.symlink(os.path.relpath(conf_name), 'conf.dump')
                     os.symlink(os.path.relpath(job_name), 'job.json')
@@ -2033,7 +2022,6 @@ def _make_fp_vasp_inner (modd_path,
                     fjob.write('{"model_devi_engine":"calypso"}')
                     fjob.close()
                     #os.system('touch job.json')
->>>>>>> upstream/master
             else:
                 os.symlink(os.path.relpath(poscar_name), 'POSCAR')
                 np.save("atom_pref", new_system.data["atom_pref"])
@@ -2441,17 +2429,14 @@ def make_fp_pwscf(iter_index,
                 ele_temp = job_data['ele_temp']
 
         sys_data = dpdata.System('POSCAR').data
-<<<<<<< HEAD
         sys_data['atom_masses'] = jdata['mass_map']
         ret = make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = user_input, use_ele = use_ele, ele_temp = ele_temp)
-=======
         sys_data['atom_masses'] = []
         pps = []
         for iii in sys_data['atom_names']:
             sys_data['atom_masses'].append(jdata['mass_map'][jdata['type_map'].index(iii)])
             pps.append(fp_pp_files[jdata['type_map'].index(iii)])
         ret = make_pwscf_input(sys_data, pps, fp_params, user_input = user_input)
->>>>>>> upstream/master
         with open('input', 'w') as fp:
             fp.write(ret)
         os.chdir(cwd)
