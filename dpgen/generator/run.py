@@ -2303,13 +2303,22 @@ def make_fp_pwscf(iter_index,
     cwd = os.getcwd()
     for ii in fp_tasks:
         os.chdir(ii)
+        
+        use_ele = False
+        if os.path.exists('job.json'):
+            with open('job.json') as fp:
+                job_data = json.load(fp)
+            if 'ele_temp' in job_data:
+                use_ele = True
+                ele_temp = job_data['ele_temp']
+        
         sys_data = dpdata.System('POSCAR').data
         sys_data['atom_masses'] = []
         pps = []
         for iii in sys_data['atom_names']:
             sys_data['atom_masses'].append(jdata['mass_map'][jdata['type_map'].index(iii)])
             pps.append(fp_pp_files[jdata['type_map'].index(iii)])
-        ret = make_pwscf_input(sys_data, pps, fp_params, user_input = user_input)
+        ret = make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = user_input, use_ele = use_ele, ele_temp = ele_temp)
         with open('input', 'w') as fp:
             fp.write(ret)
         os.chdir(cwd)
@@ -2818,7 +2827,8 @@ def post_fp_pwscf (iter_index,
                    jdata):
     model_devi_jobs = jdata['model_devi_jobs']
     assert (iter_index < len(model_devi_jobs))
-
+    use_ele_temp = jdata.get('use_ele_temp', 0)
+        
     iter_name = make_iter_name(iter_index)
     work_path = os.path.join(iter_name, fp_name)
     fp_tasks = glob.glob(os.path.join(work_path, 'task.*'))
@@ -2841,6 +2851,7 @@ def post_fp_pwscf (iter_index,
         sys_output.sort()
         sys_input.sort()
 
+        all_te = []
         flag=True
         for ii,oo in zip(sys_input,sys_output) :
             if flag:
@@ -2854,10 +2865,35 @@ def post_fp_pwscf (iter_index,
                 _sys = dpdata.LabeledSystem(oo, fmt = 'qe/pw/scf', type_map = jdata['type_map'])
                 if len(_sys)>0:
                    all_sys.append(_sys)
+                
+            with open(oo.replace('output', 'job.json')) as fp:
+                job_data = json.load(fp)
+                if 'ele_temp' in job_data:
+                    assert(use_ele_temp)
+                    ele_temp = job_data['ele_temp']
+                    all_te.append(ele_temp)    
+        all_te = np.array(all_te)  
 
         sys_data_path = os.path.join(work_path, 'data.%s'%ss)
         all_sys.to_deepmd_raw(sys_data_path)
         all_sys.to_deepmd_npy(sys_data_path, set_size = len(sys_output))
+        
+        if all_te.size > 0:
+
+            assert(len(all_sys) == all_sys.get_nframes())
+            assert(len(all_sys) == all_te.size)
+            all_te = np.reshape(all_te, [-1,1])
+            if use_ele_temp == 0:
+                raise RuntimeError('should not get ele temp at setting: use_ele_temp == 0')
+            elif use_ele_temp == 1:
+                np.savetxt(os.path.join(sys_data_path, 'fparam.raw'), all_te)
+                np.save(os.path.join(sys_data_path, 'set.000', 'fparam.npy'), all_te)
+            elif use_ele_temp == 2:
+                tile_te = np.tile(all_te, [1, all_sys.get_natoms()])
+                np.savetxt(os.path.join(sys_data_path, 'aparam.raw'), tile_te)
+                np.save(os.path.join(sys_data_path, 'set.000', 'aparam.npy'), tile_te)
+            else:
+                raise RuntimeError('invalid setting of use_ele_temp ' + str(use_ele_temp))
 
 def post_fp_abacus_scf (iter_index,
                         jdata):
