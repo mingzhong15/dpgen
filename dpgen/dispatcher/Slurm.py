@@ -106,6 +106,7 @@ class Slurm(Batch) :
         for flag in res.get('custom_flags', []):
             ret += '#SBATCH %s \n' % flag
         ret += "\n"
+        ret += "ulimit -s unlimited \n"
         for ii in res['module_unload_list'] :
             ret += "module unload %s\n" % ii
         for ii in res['module_list'] :
@@ -139,11 +140,12 @@ class Slurm(Batch) :
         if cvasp :
             if res['with_mpi']:
                 _cmd = 'python cvasp.py "srun %s %s" %s' % (_cmd, arg, fp_max_errors)
-            else :
+        else :
                 _cmd = 'python cvasp.py "%s %s" %s' % (_cmd, arg, fp_max_errors)
         else :
             if res['with_mpi']:
-                _cmd = 'srun %s %s' % (_cmd, arg)
+                #_cmd = 'srun %s %s' % (_cmd, arg)
+                _cmd = 'mpirun -np %d %s %s %s'%(res['numb_node']*res['task_per_node'], _cmd, arg, fp_max_errors)
             else :
                 _cmd = '%s %s' % (_cmd, arg)        
         return _cmd
