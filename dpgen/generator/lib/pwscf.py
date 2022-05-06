@@ -1,6 +1,7 @@
 #!/usr/bin/python3 
 
 import numpy as np
+import scipy.constants as pc
 # from lib.vasp import system_from_poscar
 
 def _convert_dict(idict) :
@@ -151,7 +152,11 @@ def _make_smearing(fp_params) :
         raise RuntimeError("unknow smearing method " + smearing)
     return smearing, degauss
 
-def make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = True) :
+def make_pwscf_input(sys_data, fp_pp_files, fp_params, user_input = True, use_ele = True, ele_temp = 300) :
+    if use_ele:
+        degauss = ele_temp * pc.Boltzmann / pc.electron_volt/ry2ev
+        fp_params['system']['degauss'] = degauss
+        
     if not user_input :
         ecut = fp_params['ecut']
         ediff = fp_params['ediff']
