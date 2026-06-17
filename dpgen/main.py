@@ -14,6 +14,7 @@ from dpgen.data.surf import gen_init_surf
 from dpgen.database.run import db_run
 from dpgen.generator.run import gen_run
 from dpgen.gui import start_dpgui
+from dpgen.recalc.gen import gen_recalc
 from dpgen.simplify.simplify import gen_simplify
 from dpgen.tools.auto_gen_param import auto_gen_param
 from dpgen.tools.run_report import run_report
@@ -182,6 +183,14 @@ def main_parser() -> argparse.ArgumentParser:
     parser_run.add_argument("MACHINE", type=str, help="machine file, json/yaml format")
     parser_run.add_argument("-d", "--debug", action="store_true", help="log debug info")
     parser_run.set_defaults(func=gen_simplify)
+
+    # recalc
+    parser_recalc = subparsers.add_parser(
+        "recalc", help="Recalculate FP with new settings from existing labeled data."
+    )
+    parser_recalc.add_argument("PARAM", type=str, help="parameter file, json/yaml format")
+    parser_recalc.add_argument("MACHINE", type=str, help="machine file, json/yaml format")
+    parser_recalc.set_defaults(func=gen_recalc)
 
     # test
     parser_test = subparsers.add_parser(
