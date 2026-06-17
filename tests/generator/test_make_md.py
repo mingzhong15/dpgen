@@ -19,6 +19,7 @@ import tempfile
 from .comp_sys import test_atom_names, test_atom_types, test_cell, test_coord
 from .context import (
     find_only_one_key,
+    setUpModule,  # noqa: F401
     machine_file,
     machine_file_v1,
     make_model_devi,
