@@ -464,292 +464,90 @@ def _make_fp_vasp_inner(
     iter_index,
     modd_path,
     work_path,
-    model_devi_skip,
-    v_trust_lo,
-    v_trust_hi,
-    f_trust_lo,
-    f_trust_hi,
-    fp_task_min,
-    fp_task_max,
-    fp_link_files,
-    type_map,
-    jdata,
+    model_devi_skip=None,
+    v_trust_lo=None,
+    v_trust_hi=None,
+    f_trust_lo=None,
+    f_trust_hi=None,
+    fp_task_min=None,
+    fp_task_max=None,
+    fp_link_files=None,
+    type_map=None,
+    jdata=None,
 ):
-    """iter_index          int             iter index
-    modd_path           string          path of model devi
-    work_path           string          path of fp
-    fp_task_max         int             max number of tasks
-    fp_link_files       [string]        linked files for fp, POTCAR for example
-    fp_params           map             parameters for fp.
+    """Read candidates from ``candidates.json`` (written by ``post_model_devi``)
+    and create FP task directories.
+
+    This is now a thin wrapper; the trust-level filtering has been moved
+    to :func:`dpgen.generator.model_devi.post_model_devi`.
     """
-    # --------------------------------------------------------------------------------------------------------------------------------------
+    return _create_fp_tasks_from_json(iter_index, modd_path, work_path, jdata, fp_link_files or [])
+
+
+def _create_fp_tasks_from_json(iter_index, modd_path, work_path, jdata, fp_link_files=None):
+    """Create FP task directories from ``candidates.json``.
+
+    Parameters
+    ----------
+    iter_index : int
+    modd_path : str
+        Path to ``01.model_devi/``.
+    work_path : str
+        Path to ``02.fp/``.
+    jdata : dict
+        Run parameters.
+    fp_link_files : list
+        Additional files to symlink into each FP task directory.
+
+    Returns
+    -------
+    list[str]
+        Paths to created FP task directories.
+    """
+    import json
+
+    if fp_link_files is None:
+        fp_link_files = []
+
     model_devi_engine = jdata.get("model_devi_engine", "lammps")
-    if model_devi_engine == "calypso":
-        iter_name = work_path.split("/")[0]
-        _work_path = os.path.join(iter_name, model_devi_name)
-        # calypso_run_opt_path = os.path.join(_work_path,calypso_run_opt_name)
-        calypso_run_opt_path = glob.glob(f"{_work_path}/{calypso_run_opt_name}.*")[0]
-        numofspecies = _parse_calypso_input("NumberOfSpecies", calypso_run_opt_path)
-        min_dis = _parse_calypso_dis_mtx(numofspecies, calypso_run_opt_path)
+    model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
+    type_map = jdata["type_map"]
+    cluster_cutoff = jdata.get("cluster_cutoff", None)
+    skip_bad_box = jdata.get("fp_skip_bad_box")
+    fp_cluster_vacuum = jdata.get("fp_cluster_vacuum", None)
+    charges_map = jdata.get("sys_charges", [])
+    charges_recorder = []
 
-        calypso_total_fp_num = 300
-        modd_path = os.path.join(modd_path, calypso_model_devi_name)
-        model_devi_skip = -1
-        with open(os.path.join(modd_path, "Model_Devi.out")) as summfile:
-            summary = np.loadtxt(summfile)
-        summaryfmax = summary[:, -4]
-        dis = summary[:, -1]
-        acc = np.where((summaryfmax <= f_trust_lo) & (dis > float(min_dis)))
-        fail = np.where((summaryfmax > f_trust_hi) | (dis <= float(min_dis)))
-        nnan = np.where(np.isnan(summaryfmax))
-
-        acc_num = len(acc[0])
-        fail_num = len(fail[0])
-        nan_num = len(nnan[0])
-        tot = len(summaryfmax) - nan_num
-        candi_num = tot - acc_num - fail_num
-        dlog.info(
-            f"summary  accurate_ratio: {acc_num * 100 / tot:8.4f}%  candidata_ratio: {candi_num * 100 / tot:8.4f}%  failed_ratio: {fail_num * 100 / tot:8.4f}%  in {tot:d} structures"
-        )
-    # --------------------------------------------------------------------------------------------------------------------------------------
-
-    modd_task = glob.glob(os.path.join(modd_path, "task.*"))
-    modd_task.sort()
-    system_index = []
-    for ii in modd_task:
-        system_index.append(os.path.basename(ii).split(".")[1])
-
-    set_tmp = set(system_index)
-    system_index = list(set_tmp)
-    system_index.sort()
+    # Read candidates.json
+    candidates_file = os.path.join(modd_path, "candidates.json")
+    if not os.path.exists(candidates_file):
+        dlog.warning(f"candidates.json not found at {candidates_file}, no FP tasks created")
+        return []
+    with open(candidates_file) as f:
+        all_candidates = json.load(f)
 
     fp_tasks = []
+    netcdftraj = None
 
-    charges_recorder = []  # record charges for each fp_task
-    charges_map = jdata.get("sys_charges", [])
-
-    cluster_cutoff = jdata.get("cluster_cutoff", None)
-    model_devi_adapt_trust_lo = jdata.get("model_devi_adapt_trust_lo", False)
-    model_devi_f_avg_relative = jdata.get("model_devi_f_avg_relative", False)
-    model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
-    # skip save *.out if detailed_report_make_fp is False, default is True
-    detailed_report_make_fp = jdata.get("detailed_report_make_fp", True)
-    # skip bad box criteria
-    skip_bad_box = jdata.get("fp_skip_bad_box")
-    # skip discrete structure in cluster
-    fp_cluster_vacuum = jdata.get("fp_cluster_vacuum", None)
-
-    def _trust_limitation_check(sys_idx, lim):
-        if isinstance(lim, list):
-            sys_lim = lim[sys_idx]
-        elif isinstance(lim, dict):
-            sys_lim = lim[str(sys_idx)]
-        else:
-            sys_lim = lim
-        return sys_lim
-
-    for ss in system_index:
-        modd_system_glob = os.path.join(modd_path, "task." + ss + ".*")
-        modd_system_task = glob.glob(modd_system_glob)
-        modd_system_task.sort()
-        if model_devi_engine in ("lammps", "gromacs", "calypso"):
-            # convert global trust limitations to local ones
-            f_trust_lo_sys = _trust_limitation_check(int(ss), f_trust_lo)
-            f_trust_hi_sys = _trust_limitation_check(int(ss), f_trust_hi)
-            v_trust_lo_sys = _trust_limitation_check(int(ss), v_trust_lo)
-            v_trust_hi_sys = _trust_limitation_check(int(ss), v_trust_hi)
-
-            # assumed e -> v
-            if not model_devi_adapt_trust_lo:
-                (
-                    fp_rest_accurate,
-                    fp_candidate,
-                    fp_rest_failed,
-                    counter,
-                ) = _select_by_model_devi_standard(
-                    modd_system_task,
-                    f_trust_lo_sys,
-                    f_trust_hi_sys,
-                    v_trust_lo_sys,
-                    v_trust_hi_sys,
-                    cluster_cutoff,
-                    model_devi_engine,
-                    model_devi_skip,
-                    model_devi_f_avg_relative=model_devi_f_avg_relative,
-                    model_devi_merge_traj=model_devi_merge_traj,
-                    detailed_report_make_fp=detailed_report_make_fp,
-                )
-            else:
-                numb_candi_f = jdata.get("model_devi_numb_candi_f", 10)
-                numb_candi_v = jdata.get("model_devi_numb_candi_v", 0)
-                perc_candi_f = jdata.get("model_devi_perc_candi_f", 0.0)
-                perc_candi_v = jdata.get("model_devi_perc_candi_v", 0.0)
-                (
-                    fp_rest_accurate,
-                    fp_candidate,
-                    fp_rest_failed,
-                    counter,
-                    f_trust_lo_ad,
-                    v_trust_lo_ad,
-                ) = _select_by_model_devi_adaptive_trust_low(
-                    modd_system_task,
-                    f_trust_hi_sys,
-                    numb_candi_f,
-                    perc_candi_f,
-                    v_trust_hi_sys,
-                    numb_candi_v,
-                    perc_candi_v,
-                    model_devi_skip=model_devi_skip,
-                    model_devi_f_avg_relative=model_devi_f_avg_relative,
-                    model_devi_merge_traj=model_devi_merge_traj,
-                )
-                dlog.info(
-                    "system {:s} {:9s} : f_trust_lo {:6.3f}   v_trust_lo {:6.3f}".format(
-                        ss, "adapted", f_trust_lo_ad, v_trust_lo_ad
-                    )
-                )
-        elif model_devi_engine == "amber":
-            counter = Counter()
-            counter["candidate"] = 0
-            counter["failed"] = 0
-            counter["accurate"] = 0
-            fp_rest_accurate = []
-            fp_candidate = []
-            fp_rest_failed = []
-            for tt in modd_system_task:
-                cc = 0
-                with open(os.path.join(tt, "rc.mdout")) as f:
-                    skip_first = False
-                    first_active = True
-                    for line in f:
-                        if line.startswith("     ntx     =       1"):
-                            skip_first = True
-                        if line.startswith(
-                            "Active learning frame written with max. frc. std.:"
-                        ):
-                            if skip_first and first_active:
-                                first_active = False
-                                continue
-                            model_devi = (
-                                float(line.split()[-2])
-                                * dpdata.unit.EnergyConversion("kcal_mol", "eV").value()
-                            )
-                            if model_devi < f_trust_lo:
-                                # accurate
-                                if detailed_report_make_fp:
-                                    fp_rest_accurate.append([tt, cc])
-                                counter["accurate"] += 1
-                            elif model_devi > f_trust_hi:
-                                # failed
-                                if detailed_report_make_fp:
-                                    fp_rest_failed.append([tt, cc])
-                                counter["failed"] += 1
-                            else:
-                                # candidate
-                                fp_candidate.append([tt, cc])
-                                counter["candidate"] += 1
-                            cc += 1
-
-        else:
-            raise RuntimeError("unknown model_devi_engine", model_devi_engine)
-
-        # print a report
-        fp_sum = sum(counter.values())
-
-        if fp_sum == 0:
-            dlog.info(f"system {ss:s} has no fp task, maybe the model devi is nan %")
+    for ss in all_candidates:
+        fp_candidate = all_candidates[ss]
+        if not fp_candidate or len(fp_candidate) == 0:
             continue
-        for cc_key, cc_value in counter.items():
-            dlog.info(
-                f"system {ss:s} {cc_key:9s} : {cc_value:6d} in {fp_sum:6d} {cc_value / fp_sum * 100:6.2f} %"
-            )
-        random.shuffle(fp_candidate)
-        if detailed_report_make_fp:
-            random.shuffle(fp_rest_failed)
-            random.shuffle(fp_rest_accurate)
-            with open(
-                os.path.join(work_path, f"candidate.shuffled.{ss}.out"), "w"
-            ) as fp:
-                for ii in fp_candidate:
-                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
-            with open(
-                os.path.join(work_path, f"rest_accurate.shuffled.{ss}.out"), "w"
-            ) as fp:
-                for ii in fp_rest_accurate:
-                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
-            with open(
-                os.path.join(work_path, f"rest_failed.shuffled.{ss}.out"), "w"
-            ) as fp:
-                for ii in fp_rest_failed:
-                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
 
-        # set number of tasks
-        accurate_ratio = float(counter["accurate"]) / float(fp_sum)
-        fp_accurate_threshold = jdata.get("fp_accurate_threshold", 1)
-        fp_accurate_soft_threshold = jdata.get(
-            "fp_accurate_soft_threshold", fp_accurate_threshold
-        )
-        if accurate_ratio < fp_accurate_soft_threshold:
-            this_fp_task_max = fp_task_max
-        elif (
-            accurate_ratio >= fp_accurate_soft_threshold
-            and accurate_ratio < fp_accurate_threshold
-        ):
-            this_fp_task_max = int(
-                fp_task_max
-                * (accurate_ratio - fp_accurate_threshold)
-                / (fp_accurate_soft_threshold - fp_accurate_threshold)
-            )
-        else:
-            this_fp_task_max = 0
-        # ----------------------------------------------------------------------------
-        if model_devi_engine == "calypso":
-            calypso_intend_fp_num_temp = (
-                len(fp_candidate) / candi_num
-            ) * calypso_total_fp_num
-            if calypso_intend_fp_num_temp < 1:
-                calypso_intend_fp_num = 1
-            else:
-                calypso_intend_fp_num = int(calypso_intend_fp_num_temp)
-        # ----------------------------------------------------------------------------
-        numb_task = min(this_fp_task_max, len(fp_candidate))
-        if numb_task < fp_task_min:
-            numb_task = 0
+        numb_task = len(fp_candidate)
 
-        # ----------------------------------------------------------------------------
-        if (model_devi_engine == "calypso" and len(jdata.get("type_map")) == 1) or (
-            model_devi_engine == "calypso"
-            and len(jdata.get("type_map")) > 1
-            and candi_num <= calypso_total_fp_num
-        ):
-            numb_task = min(this_fp_task_max, len(fp_candidate))
-            if numb_task < fp_task_min:
-                numb_task = 0
-        elif (
-            model_devi_engine == "calypso"
-            and len(jdata.get("type_map")) > 1
-            and candi_num > calypso_total_fp_num
-        ):
-            numb_task = calypso_intend_fp_num
-            if len(fp_candidate) < numb_task:
-                numb_task = 0
-        # ----------------------------------------------------------------------------
-        dlog.info(
-            f"system {ss:s} accurate_ratio: {accurate_ratio:8.4f}    thresholds: {fp_accurate_soft_threshold:6.4f} and {fp_accurate_threshold:6.4f}   eff. task min and max {fp_task_min:4d} {this_fp_task_max:4d}   number of fp tasks: {numb_task:6d}"
-        )
-        # make fp tasks
-
-        # read all.lammpstrj, save in all_sys for each system_index
+        # -- pre-load merge-trajectory data --
         all_sys = []
         trj_freq = None
-        netcdftraj = None
         if model_devi_merge_traj:
-            for ii in modd_system_task:
-                all_traj = os.path.join(ii, "all.lammpstrj")
-                all_sys_per_task = dpdata.System(
-                    all_traj, fmt="lammps/dump", type_map=type_map
+            modd_system_task = sorted(glob.glob(
+                os.path.join(modd_path, f"task.{ss}.*")
+            ))
+            for ii_path in modd_system_task:
+                all_traj = os.path.join(ii_path, "all.lammpstrj")
+                all_sys.append(
+                    dpdata.System(all_traj, fmt="lammps/dump", type_map=type_map)
                 )
-                all_sys.append(all_sys_per_task)
             model_devi_jobs = jdata["model_devi_jobs"]
             cur_job = model_devi_jobs[iter_index]
             trj_freq = int(
@@ -758,34 +556,34 @@ def _make_fp_vasp_inner(
 
         count_bad_box = 0
         count_bad_cluster = 0
-        fp_candidate = sorted(fp_candidate[:numb_task])
 
         for cc in range(numb_task):
             tt = fp_candidate[cc][0]
             ii = fp_candidate[cc][1]
-            ss = os.path.basename(tt).split(".")[1]
             conf_name = os.path.join(tt, "traj")
             conf_sys = None
+
             if model_devi_engine == "lammps":
                 if model_devi_merge_traj:
-                    conf_sys = all_sys[int(os.path.basename(tt).split(".")[-1])][
-                        int(int(ii) / trj_freq)
-                    ]
+                    t_idx = int(os.path.basename(tt).split(".")[-1])
+                    conf_sys = all_sys[t_idx][int(int(ii) / trj_freq)]
                 else:
-                    conf_name = os.path.join(conf_name, str(ii) + ".lammpstrj")
+                    conf_name = os.path.join(conf_name, f"{ii}.lammpstrj")
                 ffmt = "lammps/dump"
             elif model_devi_engine == "gromacs":
-                conf_name = os.path.join(conf_name, str(ii) + ".gromacstrj")
+                conf_name = os.path.join(conf_name, f"{ii}.gromacstrj")
                 ffmt = "lammps/dump"
             elif model_devi_engine == "amber":
                 conf_name = os.path.join(tt, "rc.nc")
                 rst_name = os.path.abspath(os.path.join(tt, "init.rst7"))
             elif model_devi_engine == "calypso":
-                conf_name = os.path.join(conf_name, str(ii) + ".poscar")
+                conf_name = os.path.join(conf_name, f"{ii}.poscar")
                 ffmt = "vasp/poscar"
             else:
                 raise RuntimeError("unknown model_devi engine", model_devi_engine)
+
             conf_name = os.path.abspath(conf_name)
+
             if skip_bad_box is not None:
                 skip = check_bad_box(conf_name, skip_bad_box, fmt=ffmt)
                 if skip:
@@ -794,33 +592,32 @@ def _make_fp_vasp_inner(
 
             if fp_cluster_vacuum is not None:
                 assert fp_cluster_vacuum > 0
-                skip_cluster = check_cluster(conf_name, fp_cluster_vacuum)
-                if skip_cluster:
+                if check_cluster(conf_name, fp_cluster_vacuum):
                     count_bad_cluster += 1
                     continue
 
             if model_devi_engine != "calypso":
-                # link job.json
-                job_name = os.path.join(tt, "job.json")
-                job_name = os.path.abspath(job_name)
+                job_name = os.path.abspath(os.path.join(tt, "job.json"))
 
             if cluster_cutoff is not None:
-                # take clusters
                 jj = fp_candidate[cc][2]
                 poscar_name = f"{conf_name}.cluster.{jj}.POSCAR"
                 new_system = take_cluster(conf_name, type_map, jj, jdata)
                 new_system.to_vasp_poscar(poscar_name)
+
             fp_task_name = make_fp_task_name(int(ss), cc)
             fp_task_path = os.path.join(work_path, fp_task_name)
             create_path(fp_task_path)
             fp_tasks.append(fp_task_path)
+
             if charges_map:
                 charges_recorder.append(charges_map[int(ss)])
+
             cwd = os.getcwd()
             os.chdir(fp_task_path)
             if cluster_cutoff is None:
                 if model_devi_engine == "lammps":
-                    if model_devi_merge_traj:
+                    if model_devi_merge_traj and conf_sys is not None:
                         conf_sys.to("lammps/lmp", "conf.dump")
                     else:
                         os.symlink(os.path.relpath(conf_name), "conf.dump")
@@ -829,98 +626,81 @@ def _make_fp_vasp_inner(
                     os.symlink(os.path.relpath(conf_name), "conf.dump")
                     os.symlink(os.path.relpath(job_name), "job.json")
                 elif model_devi_engine == "amber":
-                    # read and write with ase
                     from ase.io.netcdftrajectory import (
                         NetCDFTrajectory,
                         write_netcdftrajectory,
                     )
-
                     if cc > 0 and tt == fp_candidate[cc - 1][0]:
-                        # same MD task, use the same file
                         pass
                     else:
-                        # not the same file
                         if cc > 0:
-                            # close the old file
                             netcdftraj.close()
                         netcdftraj = NetCDFTrajectory(conf_name)
-                    # write nc file
                     write_netcdftrajectory("rc.nc", netcdftraj[ii])
                     if cc >= numb_task - 1:
                         netcdftraj.close()
-                    # link restart since it's necessary to start Amber
                     os.symlink(os.path.relpath(rst_name), "init.rst7")
                     os.symlink(os.path.relpath(job_name), "job.json")
                 elif model_devi_engine == "calypso":
                     os.symlink(os.path.relpath(conf_name), "POSCAR")
-                    fjob = open("job.json", "w+")
-                    fjob.write('{"model_devi_engine":"calypso"}')
-                    fjob.close()
-                    # os.system('touch job.json')
+                    with open("job.json", "w") as fjob:
+                        fjob.write('{"model_devi_engine":"calypso"}')
                 else:
                     raise RuntimeError("unknown model_devi_engine", model_devi_engine)
             else:
                 os.symlink(os.path.relpath(poscar_name), "POSCAR")
                 np.save("atom_pref", new_system.data["atom_pref"])
+
             for pair in fp_link_files:
                 os.symlink(pair[0], pair[1])
             os.chdir(cwd)
+
         if count_bad_box > 0:
             dlog.info(
-                f"system {ss:s} skipped {count_bad_box:6d} confs with bad box, {numb_task - count_bad_box:6d} remains"
+                f"system {ss:s} skipped {count_bad_box:6d} confs with bad box, "
+                f"{numb_task - count_bad_box:6d} remains"
             )
         if count_bad_cluster > 0:
             dlog.info(
-                f"system {ss:s} skipped {count_bad_cluster:6d} confs with bad cluster, {numb_task - count_bad_cluster:6d} remains"
+                f"system {ss:s} skipped {count_bad_cluster:6d} confs with bad cluster, "
+                f"{numb_task - count_bad_cluster:6d} remains"
             )
-    if model_devi_engine == "calypso":
-        dlog.info(
-            f"summary  accurate_ratio: {acc_num * 100 / tot:8.4f}%  candidata_ratio: {candi_num * 100 / tot:8.4f}%  failed_ratio: {fail_num * 100 / tot:8.4f}%  in {tot:d} structures"
-        )
-    if cluster_cutoff is None:
-        cwd = os.getcwd()
-        for idx, task in enumerate(fp_tasks):
-            os.chdir(task)
-            if model_devi_engine == "lammps":
-                sys = None
-                if model_devi_merge_traj:
-                    sys = dpdata.System(
-                        "conf.dump", fmt="lammps/lmp", type_map=type_map
-                    )
-                else:
-                    sys = dpdata.System(
-                        "conf.dump", fmt="lammps/dump", type_map=type_map
-                    )
-                sys.to_vasp_poscar("POSCAR")
-                # dump to poscar
 
-                if charges_map:
-                    warnings.warn(
-                        '"sys_charges" keyword only support for gromacs engine now.'
+        # -- post-creation format conversion (POSCAR / deepmd.raw) --
+        if cluster_cutoff is None:
+            cwd = os.getcwd()
+            for idx, task_dir in enumerate(
+                [os.path.join(work_path, make_fp_task_name(int(ss), i))
+                 for i in range(numb_task) if i < len(fp_tasks)]
+            ):
+                if not os.path.isdir(task_dir):
+                    continue
+                os.chdir(task_dir)
+                if model_devi_engine == "lammps":
+                    sys_dp = dpdata.System(
+                        "conf.dump",
+                        fmt="lammps/lmp" if model_devi_merge_traj else "lammps/dump",
+                        type_map=type_map,
                     )
-            elif model_devi_engine == "gromacs":
-                # dump_to_poscar('conf.dump', 'POSCAR', type_map, fmt = "gromacs/gro")
-                if charges_map:
+                    sys_dp.to_vasp_poscar("POSCAR")
+                    if charges_map:
+                        warnings.warn(
+                            '"sys_charges" keyword only support for gromacs engine now.'
+                        )
+                elif model_devi_engine == "gromacs":
                     dump_to_deepmd_raw(
                         "conf.dump",
                         "deepmd.raw",
                         type_map,
                         fmt="gromacs/gro",
-                        charge=charges_recorder[idx],
+                        charge=charges_recorder[idx] if charges_map else None,
                     )
+                elif model_devi_engine in ("amber", "calypso"):
+                    pass
                 else:
-                    dump_to_deepmd_raw(
-                        "conf.dump",
-                        "deepmd.raw",
-                        type_map,
-                        fmt="gromacs/gro",
-                        charge=None,
-                    )
-            elif model_devi_engine in ("amber", "calypso"):
-                pass
-            else:
-                raise RuntimeError("unknown model_devi engine", model_devi_engine)
-            os.chdir(cwd)
+                    raise RuntimeError("unknown model_devi engine", model_devi_engine)
+                os.chdir(cwd)
+
     return fp_tasks
 
 
@@ -1301,10 +1081,10 @@ def _link_fp_abacus_pporb_descript(iter_index, jdata):
 
 
 def _make_fp_vasp_configs(iter_index: int, jdata: dict):
-    """Read the model deviation from model_devi step, and then generate the candidated structures
-    in 02.fp directory.
+    """Generate FP task directories from ``candidates.json``.
 
-    Currently, the formats of generated structures are decided by model_devi_eigne.
+    The candidate selection (trust-level filtering + optional SOAP+FPS) is
+    now performed in :func:`dpgen.generator.model_devi.post_model_devi`.
 
     Parameters
     ----------
@@ -1315,58 +1095,16 @@ def _make_fp_vasp_configs(iter_index: int, jdata: dict):
 
     Returns
     -------
-    int
-        The number of the candidated structures.
+    list[str]
+        Paths to the created FP task directories.
     """
-    # TODO: we need to unify different data formats
-    fp_task_max = jdata["fp_task_max"]
-    model_devi_skip = jdata["model_devi_skip"]
-    type_map = jdata["type_map"]
     iter_name = make_iter_name(iter_index)
     work_path = os.path.join(iter_name, fp_name)
     create_path(work_path)
-
     modd_path = os.path.join(iter_name, model_devi_name)
-    task_min = -1
-    if os.path.isfile(os.path.join(modd_path, "cur_job.json")):
-        cur_job = json.load(open(os.path.join(modd_path, "cur_job.json")))
-        if "task_min" in cur_job:
-            task_min = cur_job["task_min"]
-    else:
-        cur_job = {}
-    # support iteration dependent trust levels
-    v_trust_lo = cur_job.get(
-        "model_devi_v_trust_lo", jdata.get("model_devi_v_trust_lo", 1e10)
+    return _make_fp_vasp_inner(
+        iter_index, modd_path, work_path, jdata=jdata,
     )
-    v_trust_hi = cur_job.get(
-        "model_devi_v_trust_hi", jdata.get("model_devi_v_trust_hi", 1e10)
-    )
-    if cur_job.get("model_devi_f_trust_lo") is not None:
-        f_trust_lo = cur_job.get("model_devi_f_trust_lo")
-    else:
-        f_trust_lo = jdata["model_devi_f_trust_lo"]
-    if cur_job.get("model_devi_f_trust_hi") is not None:
-        f_trust_hi = cur_job.get("model_devi_f_trust_hi")
-    else:
-        f_trust_hi = jdata["model_devi_f_trust_hi"]
-
-    # make configs
-    fp_tasks = _make_fp_vasp_inner(
-        iter_index,
-        modd_path,
-        work_path,
-        model_devi_skip,
-        v_trust_lo,
-        v_trust_hi,
-        f_trust_lo,
-        f_trust_hi,
-        task_min,
-        fp_task_max,
-        [],
-        type_map,
-        jdata,
-    )
-    return fp_tasks
 
 
 

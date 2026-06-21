@@ -35,6 +35,9 @@ dependencies = [
     'pymatgen-analysis-defects',
     'openbabel-wheel',
     'packaging',
+    'scikit-learn',
+    'dscribe>=2.1.0',
+    'umap-learn>=0.5.0',
 ]
 requires-python = ">=3.9"
 readme = "README.md"

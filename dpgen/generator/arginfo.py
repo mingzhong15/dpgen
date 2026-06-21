@@ -519,6 +519,72 @@ The union of the two sets is made as candidate dataset."
         Argument(
             "lmp_neigh_modify_one", int, optional=True, doc=doc_lmp_neigh_modify_one
         ),
+        # ---- post-selection (SOAP + dim-reduction + FPS) ----
+        Argument(
+            "model_devi_post_select",
+            bool,
+            optional=True,
+            default=False,
+            doc="Enable SOAP + PCA/UMAP + FPS post-selection. Instead of random "
+            "candidate selection, candidates are embedded via SOAP descriptors, "
+            "projected to 2D (PCA or UMAP), and uniformly sampled via farthest-point "
+            "sampling.",
+        ),
+        Argument(
+            "model_devi_post_select_mode",
+            str,
+            optional=True,
+            default="umap",
+            doc="Dimensionality-reduction method: 'pca' or 'umap'.",
+        ),
+        Argument(
+            "model_devi_post_select_soap_rcut",
+            float,
+            optional=True,
+            default=5.0,
+            doc="SOAP cutoff radius (Angstrom).",
+        ),
+        Argument(
+            "model_devi_post_select_soap_nmax",
+            int,
+            optional=True,
+            default=8,
+            doc="SOAP number of radial basis functions.",
+        ),
+        Argument(
+            "model_devi_post_select_soap_lmax",
+            int,
+            optional=True,
+            default=6,
+            doc="SOAP maximum angular degree.",
+        ),
+        Argument(
+            "model_devi_post_select_pca_dim",
+            int,
+            optional=True,
+            default=32,
+            doc="Intermediate PCA dimension before UMAP (only used when mode='umap').",
+        ),
+        Argument(
+            "model_devi_post_select_umap_n_neighbors",
+            int,
+            optional=True,
+            default=15,
+            doc="UMAP n_neighbors parameter.",
+        ),
+        Argument(
+            "model_devi_post_select_umap_min_dist",
+            float,
+            optional=True,
+            default=0.1,
+            doc="UMAP min_dist parameter.",
+        ),
+        Argument(
+            "model_devi_post_select_seed",
+            int,
+            optional=True,
+            doc="Random seed for reproducibility of the first FPS point and UMAP.",
+        ),
     ]
 
 

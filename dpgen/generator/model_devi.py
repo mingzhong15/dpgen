@@ -11,8 +11,10 @@ import copy
 import glob
 import json
 import os
+import random
 import shlex
 import warnings
+from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -40,6 +42,11 @@ from dpgen.generator.helpers import (
     make_model_devi_conf_name,
     make_model_devi_task_name,
     set_version,
+)
+from dpgen.generator.fp import (
+    _read_model_devi_file,
+    _select_by_model_devi_standard,
+    _select_by_model_devi_adaptive_trust_low,
 )
 from dpgen.generator.lib.lammps import make_lammps_input
 from dpgen.generator.lib.make_calypso import (
@@ -1227,6 +1234,91 @@ def _make_model_devi_amber(
 
 
 
+def _gen_post_md_soap_script(work_path, jdata):
+    """Generate ``post_md_soap.py`` in *work_path* for compute-node SOAP computation.
+
+    This script runs on each compute node after the MD job finishes, reading
+    trajectory frames and computing SOAP descriptors for all frames.
+    Results are saved as ``soap_vectors.npy`` and ``frame_indices.npy``.
+    """
+    import textwrap
+
+    type_map = jdata["type_map"]
+    merge_traj = jdata.get("model_devi_merge_traj", False)
+    trj_freq = jdata["model_devi_jobs"][0].get("trj_freq", 20)
+    rcut = jdata.get("model_devi_post_select_soap_rcut", 5.0)
+    nmax = jdata.get("model_devi_post_select_soap_nmax", 8)
+    lmax = jdata.get("model_devi_post_select_soap_lmax", 6)
+
+    script = textwrap.dedent(f'''\
+    import glob, json, os, numpy as np
+    import dpdata
+    from ase import Atoms
+    from dscribe.descriptors import SOAP
+
+    # Parameters
+    TYPE_MAP = {type_map}
+    MERGE_TRAJ = {json.dumps(merge_traj)}
+    TRJ_FREQ = {trj_freq}
+    RCUT = {rcut}
+    NMAX = {nmax}
+    LMAX = {lmax}
+
+    def _dpdata_to_ase(sys, frame_idx):
+        d = sys.data
+        symbols = [TYPE_MAP[t] for t in d['atom_types']]
+        return Atoms(
+            symbols=symbols,
+            positions=d['coords'][frame_idx],
+            cell=d['cells'][frame_idx],
+            pbc=True,
+        )
+
+    vectors = []
+    indices = []
+
+    if MERGE_TRAJ:
+        sys = dpdata.System("all.lammpstrj", fmt="lammps/dump", type_map=TYPE_MAP)
+        nf = sys.get_nframes()
+        for i in range(nf):
+            vectors.append(_dpdata_to_ase(sys, i))
+            indices.append(i * TRJ_FREQ)
+    else:
+        traj_dir = "traj"
+        if os.path.isdir(traj_dir):
+            files = sorted(
+                glob.glob(os.path.join(traj_dir, "*.lammpstrj")),
+                key=lambda x: int(os.path.basename(x).split(".")[0]),
+            )
+            for f in files:
+                sys = dpdata.System(f, fmt="lammps/dump", type_map=TYPE_MAP)
+                step = int(os.path.basename(f).split(".")[0])
+                vectors.append(_dpdata_to_ase(sys, 0))
+                indices.append(step)
+
+    if len(vectors) == 0:
+        np.save("soap_vectors.npy", np.empty((0, 1)))
+        np.save("frame_indices.npy", np.array([], dtype=int))
+    else:
+        soap = SOAP(
+            species=TYPE_MAP,
+            periodic=True,
+            r_cut=RCUT,
+            n_max=NMAX,
+            l_max=LMAX,
+            average="inner",
+        )
+        result = np.array(soap.create(vectors))
+        np.save("soap_vectors.npy", result)
+        np.save("frame_indices.npy", np.array(indices, dtype=int))
+    ''')
+
+    path = os.path.join(work_path, "post_md_soap.py")
+    with open(path, "w") as f:
+        f.write(script)
+    dlog.info(f"generated {path}")
+
+
 def run_md_model_devi(iter_index, jdata, mdata):
     # rmdlog.info("This module has been run !")
     model_devi_exec = mdata["model_devi_command"]
@@ -1375,6 +1467,18 @@ def run_md_model_devi(iter_index, jdata, mdata):
             "run_tasks for model_devi should not be empty! Please check your files."
         )
 
+    forward_common_files = list(model_names)
+
+    # ---- post-MD SOAP analysis on compute nodes ----
+    if jdata.get("model_devi_post_select", False) and model_devi_engine in (
+        "lammps",
+    ):
+        _gen_post_md_soap_script(work_path, jdata)
+        forward_common_files.append("post_md_soap.py")
+        commands = [c + " && python post_md_soap.py" for c in commands]
+        backward_files += ["soap_vectors.npy", "frame_indices.npy"]
+        dlog.info("post-MD SOAP analysis enabled (post_md_soap.py)")
+
     ### Submit jobs
     check_api_version(mdata)
 
@@ -1385,7 +1489,7 @@ def run_md_model_devi(iter_index, jdata, mdata):
         work_path=work_path,
         run_tasks=run_tasks,
         group_size=model_devi_group_size,
-        forward_common_files=model_names,
+        forward_common_files=forward_common_files,
         forward_files=forward_files,
         backward_files=backward_files,
         outlog="model_devi.log",
@@ -1407,7 +1511,333 @@ def run_model_devi(iter_index, jdata, mdata):
 
 
 def post_model_devi(iter_index, jdata, mdata):
-    pass
+    """Post-process MD results: trust-level filtering → budget → (optional) SOAP+FPS.
+
+    Writes ``candidates.json`` to ``01.model_devi/`` for consumption by
+    :func:`make_fp`.
+    """
+    from dpgen.generator.post_selection import run_post_selection_from_cache
+
+    iter_name = make_iter_name(iter_index)
+    modd_path = os.path.join(iter_name, model_devi_name)
+    work_path = os.path.join(iter_name, "02.fp")
+    create_path(work_path)
+
+    model_devi_engine = jdata.get("model_devi_engine", "lammps")
+    model_devi_skip = jdata["model_devi_skip"]
+    type_map = jdata["type_map"]
+    fp_task_max = jdata["fp_task_max"]
+    fp_task_min = jdata.get("fp_task_min", 0)
+
+    # ---- trust-level parameters (iteration-dependent via cur_job.json) ----
+    cur_job = {}
+    if os.path.isfile(os.path.join(modd_path, "cur_job.json")):
+        cur_job = json.load(open(os.path.join(modd_path, "cur_job.json")))
+    v_trust_lo = cur_job.get(
+        "model_devi_v_trust_lo", jdata.get("model_devi_v_trust_lo", 1e10)
+    )
+    v_trust_hi = cur_job.get(
+        "model_devi_v_trust_hi", jdata.get("model_devi_v_trust_hi", 1e10)
+    )
+    f_trust_lo = (
+        cur_job["model_devi_f_trust_lo"]
+        if "model_devi_f_trust_lo" in cur_job
+        else jdata["model_devi_f_trust_lo"]
+    )
+    f_trust_hi = (
+        cur_job["model_devi_f_trust_hi"]
+        if "model_devi_f_trust_hi" in cur_job
+        else jdata["model_devi_f_trust_hi"]
+    )
+
+    # ---- helpers ----
+    def _trust_limitation_check(sys_idx, lim):
+        if isinstance(lim, list):
+            return lim[sys_idx]
+        elif isinstance(lim, dict):
+            return lim[str(sys_idx)]
+        return lim
+
+    cluster_cutoff = jdata.get("cluster_cutoff", None)
+    model_devi_adapt_trust_lo = jdata.get("model_devi_adapt_trust_lo", False)
+    model_devi_f_avg_relative = jdata.get("model_devi_f_avg_relative", False)
+    model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
+    detailed_report_make_fp = jdata.get("detailed_report_make_fp", True)
+    fp_use_post_select = jdata.get("model_devi_post_select", False)
+
+    # ---- collect system index ----
+    modd_task = sorted(glob.glob(os.path.join(modd_path, "task.*")))
+    system_index = sorted(set(os.path.basename(ii).split(".")[1] for ii in modd_task))
+
+    # ---- pre-load merge-trajectory data ----
+    all_sys = None
+    trj_freq = None
+    if model_devi_merge_traj:
+        all_sys = []
+        model_devi_jobs = jdata["model_devi_jobs"]
+        cur_job_md = model_devi_jobs[iter_index]
+        trj_freq = int(
+            _get_param_alias(cur_job_md, ["t_freq", "trj_freq", "traj_freq"])
+        )
+        for ss in system_index:
+            modd_sys_tasks = sorted(glob.glob(
+                os.path.join(modd_path, f"task.{ss}.*")
+            ))
+            sys_all_trajs = []
+            for tt in modd_sys_tasks:
+                traj_file = os.path.join(tt, "all.lammpstrj")
+                sys_all_trajs.append(
+                    dpdata.System(traj_file, fmt="lammps/dump", type_map=type_map)
+                )
+            all_sys.append(sys_all_trajs)
+
+    # ---- CALYPSO pre-handling ----
+    calypso_candi_num = None
+    calypso_total_fp_num = 300
+    if model_devi_engine == "calypso":
+        calypso_run_opt_path = glob.glob(
+            f"{modd_path}/{calypso_run_opt_name}.*"
+        )[0]
+        from dpgen.generator.lib.parse_calypso import (
+            _parse_calypso_dis_mtx,
+            _parse_calypso_input,
+        )
+        numofspecies = _parse_calypso_input("NumberOfSpecies", calypso_run_opt_path)
+        min_dis = _parse_calypso_dis_mtx(numofspecies, calypso_run_opt_path)
+
+        calypso_md_path = os.path.join(modd_path, calypso_model_devi_name)
+        with open(os.path.join(calypso_md_path, "Model_Devi.out")) as summfile:
+            summary = np.loadtxt(summfile)
+        summaryfmax = summary[:, -4]
+        dis = summary[:, -1]
+        acc = np.where((summaryfmax <= f_trust_lo) & (dis > float(min_dis)))
+        fail = np.where((summaryfmax > f_trust_hi) | (dis <= float(min_dis)))
+        nnan = np.where(np.isnan(summaryfmax))
+        acc_num = len(acc[0])
+        fail_num = len(fail[0])
+        nan_num = len(nnan[0])
+        tot = len(summaryfmax) - nan_num
+        calypso_candi_num = tot - acc_num - fail_num
+        dlog.info(
+            f"summary  accurate_ratio: {acc_num * 100 / tot:8.4f}%  "
+            f"candidata_ratio: {calypso_candi_num * 100 / tot:8.4f}%  "
+            f"failed_ratio: {fail_num * 100 / tot:8.4f}%  in {tot:d} structures"
+        )
+
+    # ---- per-system processing ----
+    candidates_out = {}
+
+    ss_idx = 0  # index for all_sys
+    for ss in system_index:
+        modd_system_task = sorted(glob.glob(
+            os.path.join(modd_path, "task." + ss + ".*")
+        ))
+
+        # --- trust level filtering ---
+        if model_devi_engine in ("lammps", "gromacs", "calypso"):
+            f_trust_lo_sys = _trust_limitation_check(int(ss), f_trust_lo)
+            f_trust_hi_sys = _trust_limitation_check(int(ss), f_trust_hi)
+            v_trust_lo_sys = _trust_limitation_check(int(ss), v_trust_lo)
+            v_trust_hi_sys = _trust_limitation_check(int(ss), v_trust_hi)
+
+            if not model_devi_adapt_trust_lo:
+                (fp_rest_accurate, fp_candidate, fp_rest_failed, counter
+                 ) = _select_by_model_devi_standard(
+                    modd_system_task,
+                    f_trust_lo_sys,
+                    f_trust_hi_sys,
+                    v_trust_lo_sys,
+                    v_trust_hi_sys,
+                    cluster_cutoff,
+                    model_devi_engine,
+                    model_devi_skip,
+                    model_devi_f_avg_relative=model_devi_f_avg_relative,
+                    model_devi_merge_traj=model_devi_merge_traj,
+                    detailed_report_make_fp=detailed_report_make_fp,
+                )
+            else:
+                numb_candi_f = jdata.get("model_devi_numb_candi_f", 10)
+                numb_candi_v = jdata.get("model_devi_numb_candi_v", 0)
+                perc_candi_f = jdata.get("model_devi_perc_candi_f", 0.0)
+                perc_candi_v = jdata.get("model_devi_perc_candi_v", 0.0)
+                (fp_rest_accurate, fp_candidate, fp_rest_failed, counter,
+                 f_trust_lo_ad, v_trust_lo_ad
+                 ) = _select_by_model_devi_adaptive_trust_low(
+                    modd_system_task,
+                    f_trust_hi_sys,
+                    numb_candi_f,
+                    perc_candi_f,
+                    v_trust_hi_sys,
+                    numb_candi_v,
+                    perc_candi_v,
+                    model_devi_skip=model_devi_skip,
+                    model_devi_f_avg_relative=model_devi_f_avg_relative,
+                    model_devi_merge_traj=model_devi_merge_traj,
+                )
+                dlog.info(
+                    "system {:s} {:9s} : f_trust_lo {:6.3f}   "
+                    "v_trust_lo {:6.3f}".format(
+                        ss, "adapted", f_trust_lo_ad, v_trust_lo_ad
+                    )
+                )
+        elif model_devi_engine == "amber":
+            counter = Counter()
+            counter["candidate"] = 0
+            counter["failed"] = 0
+            counter["accurate"] = 0
+            fp_rest_accurate = []
+            fp_candidate = []
+            fp_rest_failed = []
+            for tt in modd_system_task:
+                cc = 0
+                with open(os.path.join(tt, "rc.mdout")) as f:
+                    skip_first = False
+                    first_active = True
+                    for line in f:
+                        if line.startswith("     ntx     =       1"):
+                            skip_first = True
+                        if line.startswith(
+                            "Active learning frame written with max. frc. std.:"
+                        ):
+                            if skip_first and first_active:
+                                first_active = False
+                                continue
+                            model_devi_val = (
+                                float(line.split()[-2])
+                                * dpdata.unit.EnergyConversion(
+                                    "kcal_mol", "eV"
+                                ).value()
+                            )
+                            if model_devi_val < f_trust_lo:
+                                if detailed_report_make_fp:
+                                    fp_rest_accurate.append([tt, cc])
+                                counter["accurate"] += 1
+                            elif model_devi_val > f_trust_hi:
+                                if detailed_report_make_fp:
+                                    fp_rest_failed.append([tt, cc])
+                                counter["failed"] += 1
+                            else:
+                                fp_candidate.append([tt, cc])
+                                counter["candidate"] += 1
+                            cc += 1
+        else:
+            raise RuntimeError("unknown model_devi_engine", model_devi_engine)
+
+        # --- statistics ---
+        fp_sum = sum(counter.values())
+        if fp_sum == 0:
+            dlog.info(f"system {ss:s} has no fp task, maybe the model devi is nan %")
+            ss_idx += 1
+            candidates_out[ss] = []
+            continue
+
+        for cc_key, cc_value in counter.items():
+            dlog.info(
+                f"system {ss:s} {cc_key:9s} : {cc_value:6d} in {fp_sum:6d} "
+                f"{cc_value / fp_sum * 100:6.2f} %"
+            )
+
+        # --- budget calculation ---
+        accurate_ratio = float(counter["accurate"]) / float(fp_sum)
+        fp_accurate_threshold = jdata.get("fp_accurate_threshold", 1)
+        fp_accurate_soft_threshold = jdata.get(
+            "fp_accurate_soft_threshold", fp_accurate_threshold
+        )
+
+        if accurate_ratio < fp_accurate_soft_threshold:
+            this_fp_task_max = fp_task_max
+        elif accurate_ratio < fp_accurate_threshold:
+            this_fp_task_max = int(
+                fp_task_max
+                * (accurate_ratio - fp_accurate_threshold)
+                / (fp_accurate_soft_threshold - fp_accurate_threshold)
+            )
+        else:
+            this_fp_task_max = 0
+
+        # --- CALYPSO-specific task count ---
+        if model_devi_engine == "calypso" and calypso_candi_num is not None:
+            calypso_intend = max(
+                1, int((len(fp_candidate) / max(calypso_candi_num, 1))
+                       * calypso_total_fp_num)
+            )
+            if (len(jdata.get("type_map")) == 1) or (
+                len(jdata.get("type_map")) > 1
+                and calypso_candi_num <= calypso_total_fp_num
+            ):
+                numb_task = min(this_fp_task_max, len(fp_candidate))
+                if numb_task < fp_task_min:
+                    numb_task = 0
+            else:
+                numb_task = calypso_intend
+                if len(fp_candidate) < numb_task:
+                    numb_task = 0
+        else:
+            numb_task = min(this_fp_task_max, len(fp_candidate))
+            if numb_task < fp_task_min:
+                numb_task = 0
+
+        dlog.info(
+            f"system {ss:s} accurate_ratio: {accurate_ratio:8.4f}    "
+            f"thresholds: {fp_accurate_soft_threshold:6.4f} and "
+            f"{fp_accurate_threshold:6.4f}   eff. task min and max "
+            f"{fp_task_min:4d} {this_fp_task_max:4d}   "
+            f"number of fp tasks: {numb_task:6d}"
+        )
+
+        # --- post-selection (SOAP+FPS) or random ---
+        if numb_task <= 0:
+            candidates_out[ss] = []
+            ss_idx += 1
+            continue
+
+        if fp_use_post_select and model_devi_engine in ("lammps", "gromacs"):
+            # Try compute-node cached SOAP first; fallback to local computation
+            fp_candidate = run_post_selection_from_cache(
+                iter_index, jdata, modd_path, ss,
+                fp_candidate, numb_task,
+                modd_system_task,
+            )
+        else:
+            random.shuffle(fp_candidate)
+            fp_candidate = sorted(fp_candidate[:numb_task])
+
+        candidates_out[ss] = fp_candidate
+
+        # --- detailed report (same format as before) ---
+        if detailed_report_make_fp:
+            # Write candidate, accurate and failed lists to 02.fp/
+            tmp_cand = fp_candidate[:]
+            tmp_rest_accurate = fp_rest_accurate[:]
+            tmp_rest_failed = fp_rest_failed[:]
+            random.shuffle(tmp_cand)
+            random.shuffle(tmp_rest_accurate)
+            random.shuffle(tmp_rest_failed)
+            with open(
+                os.path.join(work_path, f"candidate.shuffled.{ss}.out"), "w"
+            ) as fp:
+                for ii in tmp_cand:
+                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
+            with open(
+                os.path.join(work_path, f"rest_accurate.shuffled.{ss}.out"), "w"
+            ) as fp:
+                for ii in tmp_rest_accurate:
+                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
+            with open(
+                os.path.join(work_path, f"rest_failed.shuffled.{ss}.out"), "w"
+            ) as fp:
+                for ii in tmp_rest_failed:
+                    fp.write(" ".join([str(nn) for nn in ii]) + "\n")
+
+        ss_idx += 1
+
+    # ---- write candidates.json ----
+    with open(os.path.join(modd_path, "candidates.json"), "w") as f:
+        json.dump(
+            {k: v for k, v in candidates_out.items() if v},
+            f, indent=2,
+        )
+    dlog.info(f"wrote {os.path.join(modd_path, 'candidates.json')}")
 
 
 
