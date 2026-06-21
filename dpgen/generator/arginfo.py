@@ -1099,6 +1099,8 @@ def fp_args() -> list[Argument]:
         "If set to true, a detailed report will be generated for each iteration."
     )
     doc_ratio_failed = "Check the ratio of unsuccessfully terminated jobs. If too many FP tasks are not converged, RuntimeError will be raised."
+    doc_fp_nbands_scale = "When ``use_ele_temp`` is enabled and ``fp_nbands_esti_data`` is not provided, use this heuristic NBANDS formula: NBANDS = int(N_elec / 2 * scale) + nband_min * N_atom. Default 1.2."
+    doc_fp_nbands_min = "Minimum extra bands per atom for the heuristic NBANDS fallback. Default 5."
 
     return [
         Argument("fp_task_max", int, optional=False, doc=doc_fp_task_max),
@@ -1121,6 +1123,12 @@ def fp_args() -> list[Argument]:
             doc=doc_detailed_report_make_fp,
         ),
         Argument("ratio_failed", float, optional=True, doc=doc_ratio_failed),
+        Argument(
+            "fp_nbands_scale", float, optional=True, default=1.2, doc=doc_fp_nbands_scale
+        ),
+        Argument(
+            "fp_nbands_min", int, optional=True, default=5, doc=doc_fp_nbands_min
+        ),
     ]
 
 

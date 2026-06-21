@@ -51,7 +51,7 @@ from dpgen.generator.lib.cp2k import (
     make_cp2k_input_from_external,
     make_cp2k_xyz,
 )
-from dpgen.generator.lib.ele_temp import NBandsEsti
+from dpgen.generator.lib.ele_temp import NBandsEsti, estimate_nbands
 from dpgen.generator.lib.gaussian import make_gaussian_input, take_cluster
 from dpgen.generator.lib.lammps import get_all_dumped_forces, get_dumped_forces
 from dpgen.generator.lib.parse_calypso import (
@@ -829,6 +829,12 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
     fp_tasks.sort()
     if len(fp_tasks) == 0:
         return
+
+    use_ele_temp = jdata.get("use_ele_temp", 0)
+    fallback_scale = jdata.get("fp_nbands_scale", 1.2)
+    fallback_min = jdata.get("fp_nbands_min", 5)
+    nbands_cache = {}
+
     cwd = os.getcwd()
     for ii in fp_tasks:
         os.chdir(ii)
@@ -840,6 +846,24 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
                 make_vasp_incar_ele_temp(
                     jdata, "INCAR", job_data["ele_temp"], nbands_esti=nbands_esti
                 )
+                if nbands_esti is None and use_ele_temp > 0:
+                    sys_idx = os.path.basename(ii).split(".")[1]
+                    if sys_idx not in nbands_cache:
+                        try:
+                            nbands_cache[sys_idx] = estimate_nbands(
+                                "POSCAR", "POTCAR",
+                                scale=fallback_scale, nband_min=fallback_min,
+                            )
+                        except Exception as e:
+                            dlog.warning(
+                                f"NBANDS fallback failed for sys {sys_idx}: {e}"
+                            )
+                            nbands_cache[sys_idx] = None
+                    if nbands_cache.get(sys_idx) is not None:
+                        from pymatgen.io.vasp import Incar
+                        incar = Incar.from_file("INCAR")
+                        incar["NBANDS"] = nbands_cache[sys_idx]
+                        incar.write_file("INCAR")
         os.chdir(cwd)
 
 

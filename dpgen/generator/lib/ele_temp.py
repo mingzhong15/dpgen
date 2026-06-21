@@ -5,6 +5,33 @@ import numpy as np
 import scipy.constants as pc
 
 
+def estimate_nbands(poscar_path, potcar_path, scale=1.2, nband_min=5):
+    """启发式估算 NBANDS，基于总价电子数和原子数。
+
+    Parameters
+    ----------
+    poscar_path : str
+        path to POSCAR
+    potcar_path : str
+        path to POTCAR
+    scale : float
+        电子数缩放因子（默认 1.2）
+    nband_min : int
+        每个原子的最小额外能带数（默认 5）
+
+    Returns
+    -------
+    int
+        估算的 NBANDS
+    """
+    zvals = NBandsEsti._get_potcar_nvalence(potcar_path)
+    sys = dpdata.System(poscar_path, fmt="vasp/poscar")
+    atom_numbs = sys.get_atom_numbs()
+    total_elec = sum(z * n for z, n in zip(zvals, atom_numbs))
+    total_atoms = sum(atom_numbs)
+    return int(total_elec / 2 * scale) + nband_min * total_atoms
+
+
 class NBandsEsti:
     def __init__(self, test_list):
         if isinstance(test_list, list):
