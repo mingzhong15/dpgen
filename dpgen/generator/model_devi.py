@@ -1235,22 +1235,35 @@ def _make_model_devi_amber(
 
 
 def _gen_post_md_soap_script(work_path, jdata):
-    """Generate ``post_md_soap.py`` in *work_path* for compute-node SOAP computation.
+    """Generate ``post_md_soap.py`` in *work_path* for compute-node analysis.
 
-    This script runs on each compute node after the MD job finishes, reading
-    trajectory frames and computing SOAP descriptors for all frames.
-    Results are saved as ``soap_vectors.npy`` and ``frame_indices.npy``.
+    The script behaviour depends on the post-selection strategy:
+
+    * **global** (default): compute SOAP descriptors for all frames and save
+      ``soap_vectors.npy`` + ``frame_indices.npy``.
+    * **local**: compute SOAP, reduce to 2D (PCA/UMAP), run FPS and save
+      ``selected_indices.npy`` + ``reduced_2d.npy`` + ``frame_indices.npy``.
     """
     import textwrap
 
+    _raw = jdata.get("model_devi_post_select")
+    ps = _raw if isinstance(_raw, dict) else ({"enable": True} if _raw else {})
     type_map = jdata["type_map"]
     merge_traj = jdata.get("model_devi_merge_traj", False)
     trj_freq = jdata["model_devi_jobs"][0].get("trj_freq", 20)
-    rcut = jdata.get("model_devi_post_select_soap_rcut", 5.0)
-    nmax = jdata.get("model_devi_post_select_soap_nmax", 8)
-    lmax = jdata.get("model_devi_post_select_soap_lmax", 6)
+    strategy = ps.get("strategy", "global")
+    reduction = ps.get("reduction", "umap")
+    rcut = ps.get("soap", {}).get("rcut", 5.0)
+    nmax = ps.get("soap", {}).get("nmax", 8)
+    lmax = ps.get("soap", {}).get("lmax", 6)
+    seed = ps.get("seed")
+    pca_dim = ps.get("pca_dim", 32)
+    umap_nn = ps.get("umap", {}).get("n_neighbors", 15)
+    umap_md = ps.get("umap", {}).get("min_dist", 0.1)
+    local_k = ps.get("per_task_max", 1)
 
-    script = textwrap.dedent(f'''\
+    # Build frame-loading preamble (shared by both strategies)
+    frame_loading = textwrap.dedent(f'''\
     import glob, json, os, numpy as np
     import dpdata
     from ase import Atoms
@@ -1295,23 +1308,79 @@ def _gen_post_md_soap_script(work_path, jdata):
                 step = int(os.path.basename(f).split(".")[0])
                 vectors.append(_dpdata_to_ase(sys, 0))
                 indices.append(step)
+    ''')
+
+    if strategy == "local":
+        script = frame_loading + textwrap.dedent(f'''\
+
+    if len(vectors) == 0:
+        np.save("selected_indices.npy", np.array([], dtype=int))
+        np.save("reduced_2d.npy", np.empty((0, 2)))
+        np.save("frame_indices.npy", np.array([], dtype=int))
+    else:
+        soap = SOAP(
+            species=TYPE_MAP, periodic=True,
+            r_cut=RCUT, n_max=NMAX, l_max=LMAX, average="inner",
+        )
+        X = np.array(soap.create(vectors))
+        frame_steps = np.array(indices, dtype=int)
+
+        # Reduce to 2D
+        REDUCTION = {repr(reduction)}
+        PCA_DIM = {pca_dim}
+        UMAP_NN = {umap_nn}
+        UMAP_MD = {umap_md}
+        SEED = {seed}
+        LOCAL_K = {local_k}
+
+        if REDUCTION == "umap":
+            from sklearn.decomposition import PCA
+            import umap
+            if PCA_DIM and PCA_DIM > 0 and X.shape[1] > PCA_DIM:
+                X = PCA(n_components=PCA_DIM, random_state=SEED).fit_transform(X)
+            reducer = umap.UMAP(n_components=2, n_neighbors=UMAP_NN,
+                                min_dist=UMAP_MD, random_state=SEED)
+            coords_2d = reducer.fit_transform(X)
+        else:
+            from sklearn.decomposition import PCA
+            coords_2d = PCA(n_components=2, random_state=SEED).fit_transform(X)
+
+        np.save("reduced_2d.npy", coords_2d)
+        np.save("frame_indices.npy", frame_steps)
+
+        # Farthest Point Sampling
+        n_all = len(coords_2d)
+        n_sel = min(max(LOCAL_K, 0), n_all)
+        if n_sel >= n_all:
+            np.save("selected_indices.npy", frame_steps)
+        elif n_sel <= 0:
+            np.save("selected_indices.npy", np.array([], dtype=int))
+        else:
+            rng = np.random.RandomState(SEED)
+            sel = [rng.randint(n_all)]
+            dists = np.full(n_all, np.inf)
+            for _ in range(1, n_sel):
+                new = np.linalg.norm(coords_2d - coords_2d[sel[-1]], axis=1)
+                np.minimum(dists, new, out=dists)
+                sel.append(int(np.argmax(dists)))
+            np.save("selected_indices.npy", frame_steps[sel])
+        ''')
+    else:
+        # global strategy (default): save all SOAP vectors
+        script = frame_loading + textwrap.dedent('''
 
     if len(vectors) == 0:
         np.save("soap_vectors.npy", np.empty((0, 1)))
         np.save("frame_indices.npy", np.array([], dtype=int))
     else:
         soap = SOAP(
-            species=TYPE_MAP,
-            periodic=True,
-            r_cut=RCUT,
-            n_max=NMAX,
-            l_max=LMAX,
-            average="inner",
+            species=TYPE_MAP, periodic=True,
+            r_cut=RCUT, n_max=NMAX, l_max=LMAX, average="inner",
         )
         result = np.array(soap.create(vectors))
         np.save("soap_vectors.npy", result)
         np.save("frame_indices.npy", np.array(indices, dtype=int))
-    ''')
+        ''')
 
     path = os.path.join(work_path, "post_md_soap.py")
     with open(path, "w") as f:
@@ -1470,13 +1539,16 @@ def run_md_model_devi(iter_index, jdata, mdata):
     forward_common_files = list(model_names)
 
     # ---- post-MD SOAP analysis on compute nodes ----
-    if jdata.get("model_devi_post_select", False) and model_devi_engine in (
-        "lammps",
-    ):
+    _raw = jdata.get("model_devi_post_select")
+    ps = _raw if isinstance(_raw, dict) else ({"enable": True} if _raw else {})
+    if ps.get("enable", False) and model_devi_engine in ("lammps",):
         _gen_post_md_soap_script(work_path, jdata)
         forward_common_files.append("post_md_soap.py")
         commands = [c + " && python ../post_md_soap.py" for c in commands]
-        backward_files += ["soap_vectors.npy", "frame_indices.npy"]
+        if ps.get("strategy", "global") == "local":
+            backward_files += ["selected_indices.npy", "reduced_2d.npy", "frame_indices.npy"]
+        else:
+            backward_files += ["soap_vectors.npy", "frame_indices.npy"]
         dlog.info("post-MD SOAP analysis enabled (post_md_soap.py)")
 
     ### Submit jobs
@@ -1516,7 +1588,9 @@ def post_model_devi(iter_index, jdata, mdata):
     Writes ``candidates.json`` to ``01.model_devi/`` for consumption by
     :func:`make_fp`.
     """
-    from dpgen.generator.post_selection import run_post_selection_from_cache
+    from dpgen.generator.post_selection import (
+        run_post_selection_from_cache,
+    )
 
     iter_name = make_iter_name(iter_index)
     modd_path = os.path.join(iter_name, model_devi_name)
@@ -1563,7 +1637,9 @@ def post_model_devi(iter_index, jdata, mdata):
     model_devi_f_avg_relative = jdata.get("model_devi_f_avg_relative", False)
     model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
     detailed_report_make_fp = jdata.get("detailed_report_make_fp", True)
-    fp_use_post_select = jdata.get("model_devi_post_select", False)
+    _raw = jdata.get("model_devi_post_select")
+    ps = _raw if isinstance(_raw, dict) else ({"enable": True} if _raw else {})
+    fp_use_post_select = ps.get("enable", False)
 
     # ---- collect system index ----
     modd_task = sorted(glob.glob(os.path.join(modd_path, "task.*")))
@@ -1792,12 +1868,20 @@ def post_model_devi(iter_index, jdata, mdata):
             continue
 
         if fp_use_post_select and model_devi_engine in ("lammps", "gromacs"):
-            # Try compute-node cached SOAP first; fallback to local computation
-            fp_candidate = run_post_selection_from_cache(
-                iter_index, jdata, modd_path, ss,
-                fp_candidate, numb_task,
-                modd_system_task,
-            )
+            if ps.get("strategy", "global") == "local":
+                from dpgen.generator.post_selection import run_post_selection_local
+                fp_candidate = run_post_selection_local(
+                    iter_index, jdata, modd_path, ss,
+                    fp_candidate, numb_task,
+                    modd_system_task,
+                )
+            else:
+                # Try compute-node cached SOAP first; fallback to local
+                fp_candidate = run_post_selection_from_cache(
+                    iter_index, jdata, modd_path, ss,
+                    fp_candidate, numb_task,
+                    modd_system_task,
+                )
         else:
             random.shuffle(fp_candidate)
             fp_candidate = sorted(fp_candidate[:numb_task])

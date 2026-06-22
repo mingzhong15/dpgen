@@ -179,15 +179,20 @@ class TestParamValidation(unittest.TestCase):
             content = f.read()
 
         expected_params = [
-            "model_devi_post_select",
-            "model_devi_post_select_mode",
-            "model_devi_post_select_soap_rcut",
-            "model_devi_post_select_soap_nmax",
-            "model_devi_post_select_soap_lmax",
-            "model_devi_post_select_pca_dim",
-            "model_devi_post_select_umap_n_neighbors",
-            "model_devi_post_select_umap_min_dist",
-            "model_devi_post_select_seed",
+            '"enable"',
+            '"strategy"',
+            '"reduction"',
+            '"seed"',
+            '"soap"',
+            '"rcut"',
+            '"nmax"',
+            '"lmax"',
+            '"pca_dim"',
+            '"umap"',
+            '"n_neighbors"',
+            '"min_dist"',
+            '"per_task_max"',
+            '"per_task_min"',
         ]
         for param in expected_params:
             with self.subTest(param=param):

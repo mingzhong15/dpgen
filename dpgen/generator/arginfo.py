@@ -522,68 +522,51 @@ The union of the two sets is made as candidate dataset."
         # ---- post-selection (SOAP + dim-reduction + FPS) ----
         Argument(
             "model_devi_post_select",
-            bool,
+            dict,
             optional=True,
-            default=False,
-            doc="Enable SOAP + PCA/UMAP + FPS post-selection. Instead of random "
-            "candidate selection, candidates are embedded via SOAP descriptors, "
-            "projected to 2D (PCA or UMAP), and uniformly sampled via farthest-point "
-            "sampling.",
-        ),
-        Argument(
-            "model_devi_post_select_mode",
-            str,
-            optional=True,
-            default="umap",
-            doc="Dimensionality-reduction method: 'pca' or 'umap'.",
-        ),
-        Argument(
-            "model_devi_post_select_soap_rcut",
-            float,
-            optional=True,
-            default=5.0,
-            doc="SOAP cutoff radius (Angstrom).",
-        ),
-        Argument(
-            "model_devi_post_select_soap_nmax",
-            int,
-            optional=True,
-            default=8,
-            doc="SOAP number of radial basis functions.",
-        ),
-        Argument(
-            "model_devi_post_select_soap_lmax",
-            int,
-            optional=True,
-            default=6,
-            doc="SOAP maximum angular degree.",
-        ),
-        Argument(
-            "model_devi_post_select_pca_dim",
-            int,
-            optional=True,
-            default=32,
-            doc="Intermediate PCA dimension before UMAP (only used when mode='umap').",
-        ),
-        Argument(
-            "model_devi_post_select_umap_n_neighbors",
-            int,
-            optional=True,
-            default=15,
-            doc="UMAP n_neighbors parameter.",
-        ),
-        Argument(
-            "model_devi_post_select_umap_min_dist",
-            float,
-            optional=True,
-            default=0.1,
-            doc="UMAP min_dist parameter.",
-        ),
-        Argument(
-            "model_devi_post_select_seed",
-            int,
-            optional=True,
-            doc="Random seed for reproducibility of the first FPS point and UMAP.",
+            doc="Post-selection configuration. When present, SOAP + PCA/UMAP + FPS "
+            "replaces random candidate selection.",
+            sub_fields=[
+                Argument("enable", bool, optional=False,
+                         doc="Enable post-selection."),
+                Argument("strategy", str, optional=True, default="global",
+                         doc="Selection strategy: 'local' (per-task FPS on compute "
+                         "node) or 'global' (combined UMAP+FPS on login node)."),
+                Argument("reduction", str, optional=True, default="umap",
+                         doc="Dimensionality-reduction method: 'pca' or 'umap'."),
+                Argument("seed", int, optional=True,
+                         doc="Random seed for reproducibility."),
+                Argument(
+                    "soap", dict, optional=True,
+                    doc="SOAP descriptor parameters.",
+                    sub_fields=[
+                        Argument("rcut", float, optional=True, default=5.0,
+                                 doc="SOAP cutoff radius (Angstrom)."),
+                        Argument("nmax", int, optional=True, default=8,
+                                 doc="SOAP number of radial basis functions."),
+                        Argument("lmax", int, optional=True, default=6,
+                                 doc="SOAP maximum angular degree."),
+                    ],
+                ),
+                Argument("pca_dim", int, optional=True, default=32,
+                         doc="Intermediate PCA dimension before UMAP "
+                         "(reduction mode='umap')."),
+                Argument(
+                    "umap", dict, optional=True,
+                    doc="UMAP hyper-parameters.",
+                    sub_fields=[
+                        Argument("n_neighbors", int, optional=True, default=15,
+                                 doc="UMAP n_neighbors."),
+                        Argument("min_dist", float, optional=True, default=0.1,
+                                 doc="UMAP min_dist."),
+                    ],
+                ),
+                Argument("per_task_max", int, optional=True, default=1,
+                         doc="[local strategy] Max frames to select per task."),
+                Argument("per_task_min", int, optional=True, default=0,
+                         doc="[local strategy] Min frames guaranteed per task "
+                         "(filled from trust pool if FPS result is insufficient)."),
+            ],
         ),
     ]
 

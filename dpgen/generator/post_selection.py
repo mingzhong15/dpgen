@@ -17,6 +17,20 @@ from dpgen.generator.constants import model_devi_name
 from dpgen.generator.helpers import make_iter_name, _get_param_alias
 
 
+def _normalize_ps(jdata):
+    """Extract and normalize the ``model_devi_post_select`` config dict.
+
+    Supports both the new nested-dict format and the legacy boolean format
+    for backward compatibility.
+    """
+    raw = jdata.get("model_devi_post_select")
+    if isinstance(raw, dict):
+        return raw
+    if raw:
+        return {"enable": True}
+    return {}
+
+
 def _read_frame_ase(task_path, frame_index, model_devi_engine, type_map,
                     model_devi_merge_traj, trj_freq=None, task_idx=None,
                     all_sys=None):
@@ -84,7 +98,7 @@ def _compute_soap(ase_atoms_list, species, rcut, nmax, lmax):
     return np.array(vectors)
 
 
-def _reduce_dim(method, X, jdata):
+def _reduce_dim(method, X, ps):
     """Reduce descriptor dimensionality to 2D.
 
     Parameters
@@ -93,24 +107,23 @@ def _reduce_dim(method, X, jdata):
         ``"pca"`` or ``"umap"``.
     X : np.ndarray
         Input of shape ``(n_samples, n_features)``.
-    jdata : dict
-        Run parameters (may contain UMAP/PCA hyper-parameters).
+    ps : dict
+        ``model_devi_post_select`` config dict (``jdata["model_devi_post_select"]``).
 
     Returns
     -------
     np.ndarray
         2D coordinates, shape ``(n_samples, 2)``.
     """
+    seed = ps.get("seed")
     if method == "pca":
         from sklearn.decomposition import PCA
-        pca = PCA(n_components=2, random_state=jdata.get("model_devi_post_select_seed"))
-        return pca.fit_transform(X)
+        return PCA(n_components=2, random_state=seed).fit_transform(X)
 
     elif method == "umap":
-        pca_dim = jdata.get("model_devi_post_select_pca_dim", 32)
-        umap_nn = jdata.get("model_devi_post_select_umap_n_neighbors", 15)
-        umap_md = jdata.get("model_devi_post_select_umap_min_dist", 0.1)
-        seed = jdata.get("model_devi_post_select_seed")
+        pca_dim = ps.get("pca_dim", 32)
+        umap_nn = ps.get("umap", {}).get("n_neighbors", 15)
+        umap_md = ps.get("umap", {}).get("min_dist", 0.1)
 
         from sklearn.decomposition import PCA
         import umap
@@ -199,9 +212,11 @@ def run_post_selection_per_system(
                   "skipping SOAP post-selection")
         return fp_candidate[:numb_task]
 
+    ps = _normalize_ps(jdata)
     model_devi_engine = jdata.get("model_devi_engine", "lammps")
     model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
     type_map = jdata["type_map"]
+    seed = ps.get("seed")
 
     # ----- 1. Read candidate structures -----
     ase_atoms_list = []
@@ -225,9 +240,7 @@ def run_post_selection_per_system(
     if len(ase_atoms_list) < 2:
         dlog.warning(f"system {system_id} : too few valid structures "
                      f"({len(ase_atoms_list)}), falling back to random")
-        rng = np.random.RandomState(
-            jdata.get("model_devi_post_select_seed")
-        )
+        rng = np.random.RandomState(seed)
         idx = list(range(len(fp_candidate)))
         rng.shuffle(idx)
         return [fp_candidate[i] for i in idx[:numb_task]]
@@ -236,31 +249,27 @@ def run_post_selection_per_system(
     dlog.info(f"system {system_id} : computing SOAP for {len(ase_atoms_list)} frames ...")
     try:
         species = type_map
-        rcut = jdata.get("model_devi_post_select_soap_rcut", 5.0)
-        nmax = jdata.get("model_devi_post_select_soap_nmax", 8)
-        lmax = jdata.get("model_devi_post_select_soap_lmax", 6)
+        rcut = ps.get("soap", {}).get("rcut", 5.0)
+        nmax = ps.get("soap", {}).get("nmax", 8)
+        lmax = ps.get("soap", {}).get("lmax", 6)
         X = _compute_soap(ase_atoms_list, species, rcut, nmax, lmax)
     except Exception as e:
         dlog.warning(f"system {system_id} : SOAP computation failed ({e}), "
                      "falling back to random")
-        rng = np.random.RandomState(
-            jdata.get("model_devi_post_select_seed")
-        )
+        rng = np.random.RandomState(seed)
         idx = list(range(len(fp_candidate)))
         rng.shuffle(idx)
         return [fp_candidate[i] for i in idx[:numb_task]]
 
     # ----- 3. Dimensionality reduction to 2D -----
-    mode = jdata.get("model_devi_post_select_mode", "umap")
+    mode = ps.get("reduction", "umap")
     dlog.info(f"system {system_id} : reducing to 2D via {mode.upper()} ...")
     try:
-        coords_2d = _reduce_dim(mode, X, jdata)
+        coords_2d = _reduce_dim(mode, X, ps)
     except Exception as e:
         dlog.warning(f"system {system_id} : {mode.upper()} failed ({e}), "
                      "falling back to random")
-        rng = np.random.RandomState(
-            jdata.get("model_devi_post_select_seed")
-        )
+        rng = np.random.RandomState(seed)
         idx = list(range(len(fp_candidate)))
         rng.shuffle(idx)
         return [fp_candidate[i] for i in idx[:numb_task]]
@@ -269,8 +278,7 @@ def run_post_selection_per_system(
     n_select = min(numb_task, len(candidate_keys))
     dlog.info(f"system {system_id} : FPS selecting {n_select} / {len(candidate_keys)} frames")
     selected_idx = _farthest_point_sampling(
-        coords_2d, n_select,
-        seed=jdata.get("model_devi_post_select_seed"),
+        coords_2d, n_select, seed=seed,
     )
 
     # ----- 5. Write per-task visualization files -----
@@ -294,7 +302,8 @@ def run_post_selection_from_cache(
     and are expected as ``soap_vectors.npy`` + ``frame_indices.npy`` per task.
     Falls back to local computation if cache files are missing.
     """
-    model_devi_merge_traj = jdata.get("model_devi_merge_traj", False)
+    ps = _normalize_ps(jdata)
+    seed = ps.get("seed")
 
     # Try to build a SOAP cache index from pre-computed files
     cache_available = True
@@ -342,9 +351,7 @@ def run_post_selection_from_cache(
     if len(valid) < 2:
         dlog.warning(f"system {system_id} : too few valid SOAP vectors "
                      f"({len(valid)}), falling back to random")
-        rng = np.random.RandomState(
-            jdata.get("model_devi_post_select_seed")
-        )
+        rng = np.random.RandomState(seed)
         idx = list(range(len(fp_candidate)))
         rng.shuffle(idx)
         return [fp_candidate[i] for i in idx[:numb_task]]
@@ -353,17 +360,15 @@ def run_post_selection_from_cache(
     valid_keys = [candidate_keys[i] for i in valid]
 
     # Dimension reduction
-    mode = jdata.get("model_devi_post_select_mode", "umap")
+    mode = ps.get("reduction", "umap")
     dlog.info(f"system {system_id} : reducing {len(valid)} SOAP vectors "
               f"to 2D via {mode.upper()} (from compute-node cache) ...")
     try:
-        coords_2d = _reduce_dim(mode, X_candidates, jdata)
+        coords_2d = _reduce_dim(mode, X_candidates, ps)
     except Exception as e:
         dlog.warning(f"system {system_id} : {mode.upper()} failed ({e}), "
                      "falling back to random")
-        rng = np.random.RandomState(
-            jdata.get("model_devi_post_select_seed")
-        )
+        rng = np.random.RandomState(seed)
         idx = list(range(len(fp_candidate)))
         rng.shuffle(idx)
         return [fp_candidate[i] for i in idx[:numb_task]]
@@ -373,8 +378,7 @@ def run_post_selection_from_cache(
     dlog.info(f"system {system_id} : FPS selecting {n_select} / "
               f"{len(valid_keys)} frames")
     selected_idx = _farthest_point_sampling(
-        coords_2d, n_select,
-        seed=jdata.get("model_devi_post_select_seed"),
+        coords_2d, n_select, seed=seed,
     )
 
     # Write per-task visualization
@@ -384,6 +388,75 @@ def run_post_selection_from_cache(
     )
 
     return [valid_keys[i] for i in selected_idx]
+
+
+def run_post_selection_local(
+    iter_index, jdata, modd_path, system_id,
+    fp_candidate, numb_task,
+    modd_system_task,
+):
+    """local strategy: collect per-task FPS results, intersect with trust filter.
+
+    Each compute node ran ``post_md_soap.py`` which performed
+    SOAP → PCA/UMAP → FPS and saved ``selected_indices.npy``.
+    This function reads those selections and intersects with the
+    trust-filtered ``fp_candidate``, guaranteeing at least
+    ``per_task_min`` frames per task (filled from the trust pool)
+    and at most ``per_task_max`` frames per task.
+    """
+    ps = _normalize_ps(jdata)
+    seed = ps.get("seed")
+    pt_max = ps.get("per_task_max", 1)
+    pt_min = ps.get("per_task_min", 0)
+
+    # 1. Build task → selected-frame-index set
+    task_selected = {}
+    for tt in modd_system_task:
+        si_file = os.path.join(tt, "selected_indices.npy")
+        if os.path.exists(si_file):
+            task_selected[tt] = set(np.load(si_file).tolist())
+
+    if not task_selected:
+        dlog.info(f"system {system_id} : no selected_indices.npy found, "
+                  "falling back to local SOAP computation")
+        return run_post_selection_per_system(
+            iter_index, jdata, modd_path, system_id,
+            fp_candidate, numb_task,
+            modd_system_task, None, None,
+        )
+
+    # 2. Group trust-filtered candidates by task
+    trust_by_task = {}
+    for tt, fi in fp_candidate:
+        trust_by_task.setdefault(tt, []).append(fi)
+
+    # 3. Per task: FPS ∩ trust → fill min → truncate max
+    result = []
+    rng = np.random.RandomState(seed)
+    for tt in modd_system_task:
+        if tt not in trust_by_task:
+            continue
+        trust_frames = trust_by_task[tt]
+        fps_frames = task_selected.get(tt, set())
+
+        take = [fi for fi in trust_frames if fi in fps_frames]
+        if len(take) < pt_min:
+            extra = [fi for fi in trust_frames if fi not in fps_frames]
+            rng.shuffle(extra)
+            take += extra[:pt_min - len(take)]
+        take = take[:pt_max]
+        result.extend([tt, fi] for fi in take)
+
+    if not result:
+        dlog.warning(f"system {system_id} : local selection empty, "
+                     "falling back to random")
+        idx = list(range(len(fp_candidate)))
+        rng.shuffle(idx)
+        return [fp_candidate[i] for i in idx[:numb_task]]
+
+    dlog.info(f"system {system_id} : local selection selected "
+              f"{len(result)} frames from {len(task_selected)} tasks")
+    return result
 
 
 def _save_vis_data(candidate_keys, coords_2d, selected_idx,
