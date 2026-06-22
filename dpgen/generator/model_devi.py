@@ -1258,7 +1258,7 @@ def _gen_post_md_soap_script(work_path, jdata):
 
     # Parameters
     TYPE_MAP = {type_map}
-    MERGE_TRAJ = {json.dumps(merge_traj)}
+    MERGE_TRAJ = {str(merge_traj)}
     TRJ_FREQ = {trj_freq}
     RCUT = {rcut}
     NMAX = {nmax}
@@ -1475,7 +1475,7 @@ def run_md_model_devi(iter_index, jdata, mdata):
     ):
         _gen_post_md_soap_script(work_path, jdata)
         forward_common_files.append("post_md_soap.py")
-        commands = [c + " && python post_md_soap.py" for c in commands]
+        commands = [c + " && python ../post_md_soap.py" for c in commands]
         backward_files += ["soap_vectors.npy", "frame_indices.npy"]
         dlog.info("post-MD SOAP analysis enabled (post_md_soap.py)")
 
