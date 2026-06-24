@@ -518,6 +518,9 @@ def _create_fp_tasks_from_json(iter_index, modd_path, work_path, jdata, fp_link_
     charges_map = jdata.get("sys_charges", [])
     charges_recorder = []
 
+    use_md_temp = jdata.get("use_md_temp", False)
+    md_temp_cache = {}
+
     # Read candidates.json
     candidates_file = os.path.join(modd_path, "candidates.json")
     if not os.path.exists(candidates_file):
@@ -621,7 +624,31 @@ def _create_fp_tasks_from_json(iter_index, modd_path, work_path, jdata, fp_link_
                         conf_sys.to("lammps/lmp", "conf.dump")
                     else:
                         os.symlink(os.path.relpath(conf_name), "conf.dump")
-                    os.symlink(os.path.relpath(job_name), "job.json")
+                    if use_md_temp:
+                        if tt not in md_temp_cache:
+                            log_path = os.path.join(tt, "model_devi.log")
+                            try:
+                                md_temp_cache[tt] = _parse_md_log_temperature(log_path)
+                            except Exception:
+                                dlog.warning(
+                                    f"Failed to parse model_devi.log from {tt}, skip md_temp"
+                                )
+                                md_temp_cache[tt] = {}
+                        md_temp = md_temp_cache[tt].get(ii)
+                        if md_temp is not None:
+                            with open(job_name) as f:
+                                job_data_md = json.load(f)
+                            job_data_md["md_temp"] = md_temp
+                            with open("job.json", "w") as f:
+                                json.dump(job_data_md, f, indent=4)
+                        else:
+                            dlog.warning(
+                                f"No temperature for step {ii} in model_devi.log of {tt}, "
+                                "fallback to symlink"
+                            )
+                            os.symlink(os.path.relpath(job_name), "job.json")
+                    else:
+                        os.symlink(os.path.relpath(job_name), "job.json")
                 elif model_devi_engine == "gromacs":
                     os.symlink(os.path.relpath(conf_name), "conf.dump")
                     os.symlink(os.path.relpath(job_name), "job.json")
@@ -797,6 +824,66 @@ def make_pwmat_input(jdata, filename):
 
 
 
+def _parse_md_log_temperature(log_path):
+    """Parse model-devi LAMMPS stdout log to extract {step: temperature(K)} dict.
+
+    LAMMPS writes thermo output (step temp pe ke etotal press vol ...) to both
+    stdout (captured as ``model_devi.log``) and ``log.lammps``. This function
+    parses the log by matching lines where the first token is a numeric step
+    and the second token is a numeric temperature (13-column thermo_style).
+
+    Parameters
+    ----------
+    log_path : str
+        Path to ``model_devi.log`` (captured stdout/stderr from LAMMPS).
+
+    Returns
+    -------
+    dict[int, float]
+        Mapping of MD step -> ionic temperature (K).
+    """
+    step_to_temp = {}
+    with open(log_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            # thermo_style: step temp pe ke etotal press vol lx ly lz xy xz yz (13 cols)
+            # require >= 10 to filter out LAMMPS stderr noise
+            if len(parts) < 10:
+                continue
+            try:
+                step = int(parts[0])
+                temp = float(parts[1])
+            except (ValueError, IndexError):
+                continue
+            step_to_temp[step] = temp
+    return step_to_temp
+
+
+def _set_incar_sigma_from_md_temp(filename, ion_temp):
+    """Overwrite ``SIGMA`` in a VASP ``INCAR`` using an ionic temperature.
+
+    Only touches the ``SIGMA`` tag - all other INCAR settings (including
+    ``ISMEAR``) are preserved. Conversion: SIGMA = ion_temp * k_B / e.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the ``INCAR`` file.
+    ion_temp : float
+        Ionic temperature in Kelvin.
+    """
+    from pymatgen.io.vasp import Incar
+
+    with open(filename) as fp:
+        incar_str = fp.read()
+    try:
+        incar = incar_upper(Incar.from_string(incar_str))
+    except AttributeError:
+        incar = incar_upper(Incar.from_str(incar_str))
+    incar["SIGMA"] = ion_temp * pc.Boltzmann / pc.electron_volt
+    incar.write_file("INCAR")
+
+
 def make_vasp_incar_ele_temp(jdata, filename, ele_temp, nbands_esti=None):
     from pymatgen.io.vasp import Incar
 
@@ -831,6 +918,7 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
         return
 
     use_ele_temp = jdata.get("use_ele_temp", 0)
+    use_md_temp = jdata.get("use_md_temp", False)
     fallback_scale = jdata.get("fp_nbands_scale", 1.2)
     fallback_min = jdata.get("fp_nbands_min", 5)
     nbands_cache = {}
@@ -846,6 +934,8 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
                 make_vasp_incar_ele_temp(
                     jdata, "INCAR", job_data["ele_temp"], nbands_esti=nbands_esti
                 )
+                if use_md_temp and "md_temp" in job_data:
+                    _set_incar_sigma_from_md_temp("INCAR", job_data["md_temp"])
                 if nbands_esti is None and use_ele_temp > 0:
                     sys_idx = os.path.basename(ii).split(".")[1]
                     if sys_idx not in nbands_cache:

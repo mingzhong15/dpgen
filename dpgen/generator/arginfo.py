@@ -1084,6 +1084,7 @@ def fp_args() -> list[Argument]:
     doc_ratio_failed = "Check the ratio of unsuccessfully terminated jobs. If too many FP tasks are not converged, RuntimeError will be raised."
     doc_fp_nbands_scale = "When ``use_ele_temp`` is enabled and ``fp_nbands_esti_data`` is not provided, use this heuristic NBANDS formula: NBANDS = int(N_elec / 2 * scale) + nband_min * N_atom. Default 1.2."
     doc_fp_nbands_min = "Minimum extra bands per atom for the heuristic NBANDS fallback. Default 5."
+    doc_use_md_temp = "Source of temperature for VASP ``SIGMA`` in fp calculations. When ``True`` (requires ``use_ele_temp > 0``), the instantaneous ionic temperature is extracted from the LAMMPS ``model_devi.log`` (captured stdout) and used for ``SIGMA = k_B * T_ion / eV``, instead of the ``ele_temp`` from ``param.json``. Only effective with ``model_devi_engine`` = ``lammps``."
 
     return [
         Argument("fp_task_max", int, optional=False, doc=doc_fp_task_max),
@@ -1111,6 +1112,9 @@ def fp_args() -> list[Argument]:
         ),
         Argument(
             "fp_nbands_min", int, optional=True, default=5, doc=doc_fp_nbands_min
+        ),
+        Argument(
+            "use_md_temp", bool, optional=True, default=False, doc=doc_use_md_temp
         ),
     ]
 
