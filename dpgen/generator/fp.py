@@ -626,10 +626,10 @@ def _create_fp_tasks_from_json(iter_index, modd_path, work_path, jdata, fp_link_
                         os.symlink(os.path.relpath(conf_name), "conf.dump")
                     if use_md_temp:
                         if tt not in md_temp_cache:
-                            log_path = os.path.join(tt, "model_devi.log")
+                            log_path = os.path.join(cwd, tt, "model_devi.log")
                             try:
                                 md_temp_cache[tt] = _parse_md_log_temperature(log_path)
-                            except Exception:
+                            except OSError:
                                 dlog.warning(
                                     f"Failed to parse model_devi.log from {tt}, skip md_temp"
                                 )
