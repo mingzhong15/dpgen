@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 __package__ = "generator"
 from .context import (
     NBandsEsti,
+    estimate_nbands,
     setUpModule,  # noqa: F401
 )
 
@@ -85,3 +86,44 @@ class TestNBandsEsti(unittest.TestCase):
         self.assertEqual(len(res["nvalence"]), len(ref["nvalence"]))
         self.assertAlmostEqual(res["ele_temp"], ref["ele_temp"], places=1)
         self.assertEqual(res["nbands"], ref["nbands"])
+
+
+class TestEstimateNBands(unittest.TestCase):
+    """Tests for the temperature-aware heuristic ``estimate_nbands``."""
+
+    poscar = "out_data_nbands_esti/mgal/POSCAR"
+    potcar = "out_data_nbands_esti/mgal/POTCAR"
+    # Mg16Al16, ZVAL=[10,3] -> N_elec = 16*10 + 16*3 = 208, N_atom = 32
+
+    def test_estimate_nbands_legacy_no_temp(self):
+        # T=None with explicit legacy params degrades to the old formula
+        nb = estimate_nbands(
+            self.poscar,
+            self.potcar,
+            ele_temp_k=None,
+            scale=1.2,
+            nband_min=5,
+        )
+        self.assertEqual(nb, int(208 / 2 * 1.2) + 5 * 32)
+
+    def test_estimate_nbands_default_low_temp(self):
+        # T <= t_low (default 300) -> use nband_min_low (default 1)
+        nb = estimate_nbands(self.poscar, self.potcar, ele_temp_k=200.0)
+        self.assertEqual(nb, int(208 / 2 * 1.0) + 1 * 32)
+
+    def test_estimate_nbands_default_high_temp(self):
+        # T >= t_high (default 2000) -> use nband_min (default 3)
+        nb = estimate_nbands(self.poscar, self.potcar, ele_temp_k=3000.0)
+        self.assertEqual(nb, int(208 / 2 * 1.0) + 3 * 32)
+
+    def test_estimate_nbands_mid_temp(self):
+        # T = 1150K is the exact midpoint of (300, 2000) -> extra_per_atom = 2.0
+        nb = estimate_nbands(self.poscar, self.potcar, ele_temp_k=1150.0)
+        self.assertEqual(nb, int(208 / 2 * 1.0) + 2 * 32)
+
+    def test_estimate_nbands_monotonic(self):
+        # NBANDS must be non-decreasing with T across the full window
+        temps = [0.0, 200.0, 300.0, 1000.0, 1150.0, 2000.0, 5000.0]
+        nbs = [estimate_nbands(self.poscar, self.potcar, ele_temp_k=T) for T in temps]
+        for a, b in zip(nbs, nbs[1:]):
+            self.assertGreaterEqual(b, a)

@@ -1082,8 +1082,11 @@ def fp_args() -> list[Argument]:
         "If set to true, a detailed report will be generated for each iteration."
     )
     doc_ratio_failed = "Check the ratio of unsuccessfully terminated jobs. If too many FP tasks are not converged, RuntimeError will be raised."
-    doc_fp_nbands_scale = "When ``use_ele_temp`` is enabled and ``fp_nbands_esti_data`` is not provided, use this heuristic NBANDS formula: NBANDS = int(N_elec / 2 * scale) + nband_min * N_atom. Default 1.2."
-    doc_fp_nbands_min = "Minimum extra bands per atom for the heuristic NBANDS fallback. Default 5."
+    doc_fp_nbands_scale = "When ``use_ele_temp`` is enabled and ``fp_nbands_esti_data`` is not provided, use this heuristic NBANDS formula: NBANDS = int(N_elec / 2 * scale) + extra_per_atom(T) * N_atom. ``extra_per_atom(T)`` linearly interpolates between ``fp_nbands_min_low`` (T <= fp_nbands_t_low) and ``fp_nbands_min`` (T >= fp_nbands_t_high). When ``ele_temp_k`` is None (e.g. ``use_ele_temp = 0``), degrades to the legacy formula ``int(N_elec / 2 * scale) + fp_nbands_min * N_atom``. Default 1.0."
+    doc_fp_nbands_min = "Per-atom extra bands at the high-temperature end (T >= fp_nbands_t_high) for the heuristic NBANDS fallback. Default 3."
+    doc_fp_nbands_min_low = "Per-atom extra bands at the low-temperature end (T <= fp_nbands_t_low) for the heuristic NBANDS fallback. Default 1."
+    doc_fp_nbands_t_low = "Lower bound of the temperature interpolation window (K) for the heuristic NBANDS fallback. Default 300."
+    doc_fp_nbands_t_high = "Upper bound of the temperature interpolation window (K) for the heuristic NBANDS fallback. At T >= this value, ``fp_nbands_min`` applies. Default 2000."
     doc_use_md_temp = "Source of temperature for VASP ``SIGMA`` in fp calculations. When ``True`` (requires ``use_ele_temp > 0``), the instantaneous ionic temperature is extracted from the LAMMPS ``model_devi.log`` (captured stdout) and used for ``SIGMA = k_B * T_ion / eV``, instead of the ``ele_temp`` from ``param.json``. Only effective with ``model_devi_engine`` = ``lammps``."
 
     return [
@@ -1108,10 +1111,19 @@ def fp_args() -> list[Argument]:
         ),
         Argument("ratio_failed", float, optional=True, doc=doc_ratio_failed),
         Argument(
-            "fp_nbands_scale", float, optional=True, default=1.2, doc=doc_fp_nbands_scale
+            "fp_nbands_scale", float, optional=True, default=1.0, doc=doc_fp_nbands_scale
         ),
         Argument(
-            "fp_nbands_min", int, optional=True, default=5, doc=doc_fp_nbands_min
+            "fp_nbands_min", int, optional=True, default=3, doc=doc_fp_nbands_min
+        ),
+        Argument(
+            "fp_nbands_min_low", int, optional=True, default=1, doc=doc_fp_nbands_min_low
+        ),
+        Argument(
+            "fp_nbands_t_low", float, optional=True, default=300.0, doc=doc_fp_nbands_t_low
+        ),
+        Argument(
+            "fp_nbands_t_high", float, optional=True, default=2000.0, doc=doc_fp_nbands_t_high
         ),
         Argument(
             "use_md_temp", bool, optional=True, default=False, doc=doc_use_md_temp

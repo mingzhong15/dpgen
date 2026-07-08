@@ -5,8 +5,23 @@ import numpy as np
 import scipy.constants as pc
 
 
-def estimate_nbands(poscar_path, potcar_path, scale=1.2, nband_min=5):
-    """启发式估算 NBANDS，基于总价电子数和原子数。
+def estimate_nbands(
+    poscar_path,
+    potcar_path,
+    ele_temp_k=None,
+    scale=1.0,
+    nband_min=3,
+    nband_min_low=1,
+    t_low=300.0,
+    t_high=2000.0,
+):
+    """启发式估算 NBANDS，基于总价电子数、原子数与电子温度。
+
+    当 ``ele_temp_k`` 为 None 时退化为旧公式
+    ``int(N_elec / 2 * scale) + nband_min * N_atom``；
+    当给定温度时，per-atom 额外能带数在
+    ``nband_min_low`` (T <= t_low) 与 ``nband_min`` (T >= t_high)
+    之间线性插值，物理上对应于 Fermi-Dirac 展宽的额外空带数。
 
     Parameters
     ----------
@@ -14,10 +29,18 @@ def estimate_nbands(poscar_path, potcar_path, scale=1.2, nband_min=5):
         path to POSCAR
     potcar_path : str
         path to POTCAR
+    ele_temp_k : float or None
+        电子温度（Kelvin）。None 时退化为旧公式（与温度无关）。
     scale : float
-        电子数缩放因子（默认 1.2）
+        电子数缩放因子（默认 1.0）
     nband_min : int
-        每个原子的最小额外能带数（默认 5）
+        T >= t_high 时每个原子的额外能带数（默认 3）
+    nband_min_low : int
+        T <= t_low 时每个原子的额外能带数（默认 1）
+    t_low : float
+        线性插值温度下界（K，默认 300）
+    t_high : float
+        线性插值温度上界（K，默认 2000）
 
     Returns
     -------
@@ -29,7 +52,17 @@ def estimate_nbands(poscar_path, potcar_path, scale=1.2, nband_min=5):
     atom_numbs = sys.get_atom_numbs()
     total_elec = sum(z * n for z, n in zip(zvals, atom_numbs))
     total_atoms = sum(atom_numbs)
-    return int(total_elec / 2 * scale) + nband_min * total_atoms
+    base = int(total_elec / 2 * scale)
+    if ele_temp_k is None:
+        extra_per_atom = nband_min
+    elif ele_temp_k <= t_low:
+        extra_per_atom = nband_min_low
+    elif ele_temp_k >= t_high:
+        extra_per_atom = nband_min
+    else:
+        frac = (ele_temp_k - t_low) / (t_high - t_low)
+        extra_per_atom = nband_min_low + (nband_min - nband_min_low) * frac
+    return base + int(extra_per_atom * total_atoms)
 
 
 class NBandsEsti:

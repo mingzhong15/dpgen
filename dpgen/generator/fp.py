@@ -919,8 +919,11 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
 
     use_ele_temp = jdata.get("use_ele_temp", 0)
     use_md_temp = jdata.get("use_md_temp", False)
-    fallback_scale = jdata.get("fp_nbands_scale", 1.2)
-    fallback_min = jdata.get("fp_nbands_min", 5)
+    fallback_scale = jdata.get("fp_nbands_scale", 1.0)
+    fallback_min = jdata.get("fp_nbands_min", 3)
+    fallback_min_low = jdata.get("fp_nbands_min_low", 1)
+    fallback_t_low = jdata.get("fp_nbands_t_low", 300.0)
+    fallback_t_high = jdata.get("fp_nbands_t_high", 2000.0)
     nbands_cache = {}
 
     cwd = os.getcwd()
@@ -938,21 +941,35 @@ def make_fp_vasp_incar(iter_index, jdata, nbands_esti=None):
                     _set_incar_sigma_from_md_temp("INCAR", job_data["md_temp"])
                 if nbands_esti is None and use_ele_temp > 0:
                     sys_idx = os.path.basename(ii).split(".")[1]
-                    if sys_idx not in nbands_cache:
+                    if use_md_temp and "md_temp" in job_data:
+                        T_used = job_data["md_temp"]
+                    else:
+                        T_used = job_data.get("ele_temp", None)
+                    cache_key = (
+                        sys_idx,
+                        round(float(T_used), 1) if T_used is not None else None,
+                    )
+                    if cache_key not in nbands_cache:
                         try:
-                            nbands_cache[sys_idx] = estimate_nbands(
+                            nbands_cache[cache_key] = estimate_nbands(
                                 "POSCAR", "POTCAR",
-                                scale=fallback_scale, nband_min=fallback_min,
+                                ele_temp_k=T_used,
+                                scale=fallback_scale,
+                                nband_min=fallback_min,
+                                nband_min_low=fallback_min_low,
+                                t_low=fallback_t_low,
+                                t_high=fallback_t_high,
                             )
                         except Exception as e:
                             dlog.warning(
-                                f"NBANDS fallback failed for sys {sys_idx}: {e}"
+                                f"NBANDS fallback failed for sys {sys_idx} "
+                                f"T={T_used}: {e}"
                             )
-                            nbands_cache[sys_idx] = None
-                    if nbands_cache.get(sys_idx) is not None:
+                            nbands_cache[cache_key] = None
+                    if nbands_cache.get(cache_key) is not None:
                         from pymatgen.io.vasp import Incar
                         incar = Incar.from_file("INCAR")
-                        incar["NBANDS"] = nbands_cache[sys_idx]
+                        incar["NBANDS"] = nbands_cache[cache_key]
                         incar.write_file("INCAR")
         os.chdir(cwd)
 

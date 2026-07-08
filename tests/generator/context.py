@@ -2,7 +2,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from dpgen.generator.lib.ele_temp import NBandsEsti  # noqa: F401
+from dpgen.generator.lib.ele_temp import NBandsEsti, estimate_nbands  # noqa: F401
 from dpgen.generator.lib.gaussian import _crd2frag, detect_multiplicity  # noqa: F401
 from dpgen.generator.lib.lammps import (
     get_all_dumped_forces,  # noqa: F401
